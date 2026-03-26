@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore .\PicSelect\PicSelect.csproj
+
+      - name: Run core tests
+        run: dotnet test .\PicSelect.Core.Tests\PicSelect.Core.Tests.csproj -c Release --no-restore
+
+      - name: Publish self-contained app
+        run: >
+          dotnet publish .\PicSelect\PicSelect.csproj
+          -c Release
+          -r win-x64
+          -p:Platform=x64
+          -p:PublishProfile=
+          -p:SelfContained=true
+          -p:WindowsAppSDKSelfContained=true
+          -p:PublishSingleFile=false
+          -p:PublishTrimmed=false
+          -o .\artifacts\publish\win-x64
+
+      - name: Archive portable publish
+        shell: pwsh
+        run: Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\PicSelect-win-x64-portable.zip -Force
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = $env:GITHUB_REF_NAME
+          }
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Unable to resolve release version."
+          }
+          if ($version.StartsWith("v")) {
+            $version = $version.Substring(1)
+          }
+          "value=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if (-not $tag.StartsWith("v")) {
+            $tag = "v${{ steps.version.outputs.value }}"
+          }
+          "value=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "Unable to locate ISCC.exe"
+          }
+          & $iscc /DMyAppVersion=${{ steps.version.outputs.value }} .\installer\PicSelect.iss
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.value }}
+          name: ${{ steps.release_tag.outputs.value }}
+          generate_release_notes: true
+          files: |
+            artifacts\installer\PicSelect-Setup-x64.exe
+            artifacts\PicSelect-win-x64-portable.zip
