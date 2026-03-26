@@ -7,8 +7,9 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
     <Page.Content>
-        <Grid Padding="32">
+        <Grid Padding="32" RowSpacing="20">
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
@@ -26,7 +27,6 @@
 
             <StackPanel
                 Grid.Row="1"
-                Margin="0,24,0,0"
                 Orientation="Horizontal"
                 Spacing="12">
                 <Button
@@ -41,24 +41,85 @@
                     Width="24" />
             </StackPanel>
 
-            <Border
+            <TextBlock
                 Grid.Row="2"
-                Margin="0,24,0,0"
-                Padding="20"
+                x:Name="StatusTextBlock"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Text="Choose a folder to create your first project." />
+
+            <Grid Grid.Row="3">
+                <Border
+                    x:Name="EmptyStateBorder"
+                    Padding="28"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12">
+                    <StackPanel Spacing="8">
+                        <TextBlock
+                            FontSize="18"
+                            FontWeight="SemiBold"
+                            Text="No projects yet" />
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Import a top-level photo folder to create a saved PicSelect project." />
+                    </StackPanel>
+                </Border>
+
+                <ListView
+                    x:Name="ProjectsListView"
+                    IsItemClickEnabled="True"
+                    ItemClick="OnProjectInvoked"
+                    SelectionMode="None"
+                    Visibility="Collapsed">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Border
+                                Margin="0,0,0,12"
+                                Padding="16"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="12">
-                <StackPanel Spacing="8">
-                    <TextBlock
-                        FontSize="18"
-                        FontWeight="SemiBold"
-                        Text="Import status" />
-                    <TextBlock
-                        x:Name="StatusTextBlock"
-                        Text="No project imported yet." />
-                </StackPanel>
-            </Border>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Spacing="6">
+                                        <TextBlock
+                                            FontSize="18"
+                                            FontWeight="SemiBold"
+                                            Text="{Binding DisplayName}" />
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="{Binding FolderPath}"
+                                            TextWrapping="WrapWholeWords" />
+                                    </StackPanel>
+
+                                    <StackPanel
+                                        Grid.Column="1"
+                                        HorizontalAlignment="Right"
+                                        Spacing="4">
+                                        <TextBlock
+                                            HorizontalAlignment="Right">
+                                            <Run Text="{Binding PhotoCount}" />
+                                            <Run Text=" photos" />
+                                        </TextBlock>
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            HorizontalAlignment="Right">
+                                            <Run Text="{Binding IterationCount}" />
+                                            <Run Text=" iterations" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
         </Grid>
     </Page.Content>
 </Page>

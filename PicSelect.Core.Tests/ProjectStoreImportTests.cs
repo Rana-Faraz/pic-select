@@ -56,6 +56,27 @@ public sealed class ProjectStoreImportTests
         Assert.Equal(1, project.IterationCount);
     }
 
+    [Fact]
+    public async Task GetProjectOverviewAsync_LoadsIterationSummaryAfterStoreIsRecreated()
+    {
+        using var workspace = new TestWorkspace();
+        var sourceFolder = workspace.CreateDirectory("detail");
+        workspace.WriteFile(Path.Combine(sourceFolder, "frame-02.png"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "frame-01.png"));
+
+        var firstStore = new PicSelectStore(workspace.DatabasePath);
+        var importedProject = await firstStore.ImportProjectFromFolderAsync(sourceFolder);
+
+        var secondStore = new PicSelectStore(workspace.DatabasePath);
+        var overview = await secondStore.GetProjectOverviewAsync(importedProject.ProjectId);
+
+        Assert.NotNull(overview);
+        var iteration = Assert.Single(overview.Iterations);
+        Assert.Equal(1, iteration.Number);
+        Assert.Equal(2, iteration.TotalPhotoCount);
+        Assert.Equal(0, iteration.ReviewedPhotoCount);
+    }
+
     private sealed class TestWorkspace : IDisposable
     {
         private readonly string rootPath = Path.Combine(Path.GetTempPath(), "PicSelect.Tests", Guid.NewGuid().ToString("N"));
