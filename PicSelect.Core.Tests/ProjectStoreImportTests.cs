@@ -109,6 +109,29 @@ public sealed class ProjectStoreImportTests
             updates.Select(update => update.ImportedPhotoCount).OrderBy(count => count)));
     }
 
+    [Fact]
+    public async Task ImportProjectFromFolderAsync_SkipsUnreadableFilesAndPersistsSkippedCount()
+    {
+        using var workspace = new TestWorkspace();
+        var sourceFolder = workspace.CreateDirectory("errors");
+        var goodPhotoPath = Path.Combine(sourceFolder, "good.jpg");
+        var lockedPhotoPath = Path.Combine(sourceFolder, "locked.png");
+        workspace.WriteFile(goodPhotoPath);
+        workspace.WriteFile(lockedPhotoPath);
+
+        using var lockedStream = new FileStream(lockedPhotoPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        var store = new PicSelectStore(workspace.DatabasePath);
+        var importedProject = await store.ImportProjectFromFolderAsync(sourceFolder);
+        var project = await store.GetProjectOverviewAsync(importedProject.ProjectId);
+
+        Assert.NotNull(project);
+        Assert.Equal(1, importedProject.ImportedPhotoCount);
+        Assert.Equal(ProjectImportStatus.Completed, project.ImportStatus);
+        Assert.Equal(1, project.SkippedPhotoCount);
+        Assert.Equal(new[] { "good.jpg" }, (await store.GetIterationPhotosAsync(importedProject.ProjectId, 1)).Select(photo => photo.FileName));
+    }
+
     private sealed class TestWorkspace : IDisposable
     {
         private readonly string rootPath = Path.Combine(Path.GetTempPath(), "PicSelect.Tests", Guid.NewGuid().ToString("N"));

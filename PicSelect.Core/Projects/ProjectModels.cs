@@ -27,14 +27,18 @@ public sealed record ProjectSummary(
     string DisplayName,
     DateTimeOffset ImportedAtUtc,
     ProjectImportStatus ImportStatus,
+    int SkippedPhotoCount,
     int PhotoCount,
     int IterationCount)
 {
     public bool IsReviewAvailable => ImportStatus == ProjectImportStatus.Completed;
     public string ImportElapsedText => ProjectTimeFormatting.FormatElapsed(DateTimeOffset.UtcNow - ImportedAtUtc);
-    public string ImportCountText => ImportStatus == ProjectImportStatus.Completed
-        ? $"{PhotoCount} photos imported"
-        : $"{PhotoCount} photos imported so far";
+    public string ImportCountText =>
+        SkippedPhotoCount > 0
+            ? $"{PhotoCount} photos imported, {SkippedPhotoCount} skipped"
+            : ImportStatus == ProjectImportStatus.Completed
+                ? $"{PhotoCount} photos imported"
+                : $"{PhotoCount} photos imported so far";
 }
 
 public sealed record ProjectOverview(
@@ -43,6 +47,7 @@ public sealed record ProjectOverview(
     string DisplayName,
     DateTimeOffset ImportedAtUtc,
     ProjectImportStatus ImportStatus,
+    int SkippedPhotoCount,
     IReadOnlyList<IterationSummary> Iterations)
 {
     public bool IsReviewAvailable => ImportStatus == ProjectImportStatus.Completed;

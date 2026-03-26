@@ -108,15 +108,24 @@ public sealed class PicSelectStore
 
         var iterationId = await EnsureIterationOneAsync(connection, projectId, startedAtUtc, cancellationToken);
         var importedPhotoCount = project.PhotoCount;
+        var skippedPhotoCount = project.SkippedPhotoCount;
         var batch = new List<DiscoveredPhoto>(ImportBatchSize);
         var status = ProjectImportStatus.Scanning;
 
         try
         {
-            foreach (var file in EnumerateSupportedFiles(project.FolderPath))
+            foreach (var scanItem in EnumerateSupportedFiles(project.FolderPath))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                batch.Add(file);
+
+                if (scanItem.IsSkipped)
+                {
+                    skippedPhotoCount++;
+                    await UpdateSkippedPhotoCountAsync(connection, projectId, skippedPhotoCount, cancellationToken);
+                    continue;
+                }
+
+                batch.Add(scanItem.Photo!);
 
                 if (batch.Count < ImportBatchSize)
                 {
@@ -231,7 +240,8 @@ public sealed class PicSelectStore
             """
             UPDATE Projects
             SET ImportStatus = $importStatus,
-                ImportedAtUtc = $importedAtUtc
+                ImportedAtUtc = $importedAtUtc,
+                SkippedPhotoCount = 0
             WHERE Id = $projectId;
             """,
             cancellationToken,
@@ -331,12 +341,13 @@ public sealed class PicSelectStore
                 p.DisplayName,
                 p.ImportedAtUtc,
                 p.ImportStatus,
+                p.SkippedPhotoCount,
                 COUNT(DISTINCT ph.Id) AS PhotoCount,
                 COALESCE(MAX(i.Number), 0) AS IterationCount
             FROM Projects p
             LEFT JOIN Photos ph ON ph.ProjectId = p.Id
             LEFT JOIN Iterations i ON i.ProjectId = p.Id
-            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc
+            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc, p.ImportStatus, p.SkippedPhotoCount
             ORDER BY p.ImportedAtUtc DESC, p.Id DESC;
             """;
 
@@ -351,7 +362,8 @@ public sealed class PicSelectStore
                 DateTimeOffset.Parse(reader.GetString(3)),
                 ParseProjectImportStatus(reader.GetString(4)),
                 reader.GetInt32(5),
-                reader.GetInt32(6)));
+                reader.GetInt32(6),
+                reader.GetInt32(7)));
         }
 
         return projects;
@@ -363,7 +375,7 @@ public sealed class PicSelectStore
         using var projectCommand = connection.CreateCommand();
         projectCommand.CommandText =
             """
-            SELECT Id, FolderPath, DisplayName, ImportedAtUtc, ImportStatus
+            SELECT Id, FolderPath, DisplayName, ImportedAtUtc, ImportStatus, SkippedPhotoCount
             FROM Projects
             WHERE Id = $projectId;
             """;
@@ -379,6 +391,7 @@ public sealed class PicSelectStore
         var displayName = projectReader.GetString(2);
         var importedAtUtc = DateTimeOffset.Parse(projectReader.GetString(3));
         var importStatus = ParseProjectImportStatus(projectReader.GetString(4));
+        var skippedPhotoCount = projectReader.GetInt32(5);
 
         var iterations = new List<IterationSummary>();
         using var iterationCommand = connection.CreateCommand();
@@ -409,7 +422,7 @@ public sealed class PicSelectStore
                 ignoredCount));
         }
 
-        return new ProjectOverview(projectId, folderPath, displayName, importedAtUtc, importStatus, iterations);
+        return new ProjectOverview(projectId, folderPath, displayName, importedAtUtc, importStatus, skippedPhotoCount, iterations);
     }
 
     public async Task<IReadOnlyList<IterationPhoto>> GetIterationPhotosAsync(
@@ -782,12 +795,12 @@ public sealed class PicSelectStore
         _ = await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static IEnumerable<DiscoveredPhoto> EnumerateSupportedFiles(string folderPath)
+    private static IEnumerable<ScannedImportItem> EnumerateSupportedFiles(string folderPath)
     {
         return EnumerateSupportedFiles(folderPath, folderPath);
     }
 
-    private static IEnumerable<DiscoveredPhoto> EnumerateSupportedFiles(string rootFolderPath, string currentFolderPath)
+    private static IEnumerable<ScannedImportItem> EnumerateSupportedFiles(string rootFolderPath, string currentFolderPath)
     {
         var currentDirectory = new DirectoryInfo(currentFolderPath);
         var entries = currentDirectory
@@ -800,9 +813,9 @@ public sealed class PicSelectStore
         {
             if (entry is DirectoryInfo directory)
             {
-                foreach (var photo in EnumerateSupportedFiles(rootFolderPath, directory.FullName))
+                foreach (var scannedItem in EnumerateSupportedFiles(rootFolderPath, directory.FullName))
                 {
-                    yield return photo;
+                    yield return scannedItem;
                 }
 
                 continue;
@@ -813,14 +826,13 @@ public sealed class PicSelectStore
                 continue;
             }
 
-            var relativePath = Path.GetRelativePath(rootFolderPath, file.FullName);
-            yield return new DiscoveredPhoto(
-                file.FullName,
-                relativePath,
-                file.Name,
-                relativePath.ToUpperInvariant(),
-                file.Length,
-                file.LastWriteTimeUtc);
+            if (!TryCreateDiscoveredPhoto(rootFolderPath, file, out var photo))
+            {
+                yield return ScannedImportItem.Skipped();
+                continue;
+            }
+
+            yield return ScannedImportItem.Found(photo!);
         }
     }
 
@@ -856,13 +868,14 @@ public sealed class PicSelectStore
                 p.DisplayName,
                 p.ImportedAtUtc,
                 p.ImportStatus,
+                p.SkippedPhotoCount,
                 COUNT(DISTINCT ph.Id) AS PhotoCount,
                 COALESCE(MAX(i.Number), 0) AS IterationCount
             FROM Projects p
             LEFT JOIN Photos ph ON ph.ProjectId = p.Id
             LEFT JOIN Iterations i ON i.ProjectId = p.Id
             WHERE p.FolderPath = $folderPath
-            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc, p.ImportStatus;
+            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc, p.ImportStatus, p.SkippedPhotoCount;
             """;
         command.Parameters.AddWithValue("$folderPath", folderPath);
 
@@ -879,7 +892,8 @@ public sealed class PicSelectStore
             DateTimeOffset.Parse(reader.GetString(3)),
             ParseProjectImportStatus(reader.GetString(4)),
             reader.GetInt32(5),
-            reader.GetInt32(6));
+            reader.GetInt32(6),
+            reader.GetInt32(7));
     }
 
     private static async Task<ProjectSummary?> TryGetProjectSummaryByIdAsync(
@@ -896,13 +910,14 @@ public sealed class PicSelectStore
                 p.DisplayName,
                 p.ImportedAtUtc,
                 p.ImportStatus,
+                p.SkippedPhotoCount,
                 COUNT(DISTINCT ph.Id) AS PhotoCount,
                 COALESCE(MAX(i.Number), 0) AS IterationCount
             FROM Projects p
             LEFT JOIN Photos ph ON ph.ProjectId = p.Id
             LEFT JOIN Iterations i ON i.ProjectId = p.Id
             WHERE p.Id = $projectId
-            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc, p.ImportStatus;
+            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc, p.ImportStatus, p.SkippedPhotoCount;
             """;
         command.Parameters.AddWithValue("$projectId", projectId);
 
@@ -919,7 +934,8 @@ public sealed class PicSelectStore
             DateTimeOffset.Parse(reader.GetString(3)),
             ParseProjectImportStatus(reader.GetString(4)),
             reader.GetInt32(5),
-            reader.GetInt32(6));
+            reader.GetInt32(6),
+            reader.GetInt32(7));
     }
 
     private async Task<List<IterationPhoto>> GetIterationPhotosByIterationIdAsync(
@@ -1074,7 +1090,8 @@ public sealed class PicSelectStore
                 FolderPath TEXT NOT NULL UNIQUE,
                 DisplayName TEXT NOT NULL,
                 ImportedAtUtc TEXT NOT NULL,
-                ImportStatus TEXT NOT NULL DEFAULT 'Completed'
+                ImportStatus TEXT NOT NULL DEFAULT 'Completed',
+                SkippedPhotoCount INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS Photos (
@@ -1137,6 +1154,7 @@ public sealed class PicSelectStore
 
         _ = command.ExecuteNonQuery();
         EnsureColumnExists(connection, "Projects", "ImportStatus", "TEXT NOT NULL DEFAULT 'Completed'");
+        EnsureColumnExists(connection, "Projects", "SkippedPhotoCount", "INTEGER NOT NULL DEFAULT 0");
         EnsureColumnExists(connection, "Photos", "RelativePath", "TEXT NOT NULL DEFAULT ''");
         EnsureColumnExists(connection, "Photos", "SortPath", "TEXT NOT NULL DEFAULT ''");
         BackfillPhotoPathColumns(connection);
@@ -1214,8 +1232,55 @@ public sealed class PicSelectStore
         _ = await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private static async Task UpdateSkippedPhotoCountAsync(
+        SqliteConnection connection,
+        long projectId,
+        int skippedPhotoCount,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Projects
+            SET SkippedPhotoCount = $skippedPhotoCount
+            WHERE Id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$skippedPhotoCount", skippedPhotoCount);
+        command.Parameters.AddWithValue("$projectId", projectId);
+        _ = await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static string GetEntrySortKey(FileSystemInfo entry) =>
         entry is DirectoryInfo ? $"{entry.Name}{Path.DirectorySeparatorChar}" : entry.Name;
+
+    private static bool TryCreateDiscoveredPhoto(string rootFolderPath, FileInfo file, out DiscoveredPhoto? photo)
+    {
+        try
+        {
+            using var stream = file.OpenRead();
+            _ = stream.ReadByte();
+
+            var relativePath = Path.GetRelativePath(rootFolderPath, file.FullName);
+            photo = new DiscoveredPhoto(
+                file.FullName,
+                relativePath,
+                file.Name,
+                relativePath.ToUpperInvariant(),
+                file.Length,
+                file.LastWriteTimeUtc);
+            return true;
+        }
+        catch (IOException)
+        {
+            photo = null;
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            photo = null;
+            return false;
+        }
+    }
 
     private sealed record DiscoveredPhoto(
         string AbsolutePath,
@@ -1224,4 +1289,11 @@ public sealed class PicSelectStore
         string SortPath,
         long SizeBytes,
         DateTimeOffset LastModifiedUtc);
+
+    private sealed record ScannedImportItem(DiscoveredPhoto? Photo, bool IsSkipped)
+    {
+        public static ScannedImportItem Found(DiscoveredPhoto photo) => new(photo, false);
+
+        public static ScannedImportItem Skipped() => new(null, true);
+    }
 }

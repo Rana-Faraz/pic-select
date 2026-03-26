@@ -225,9 +225,13 @@ public sealed partial class ProjectDetailPage : Page
     private static string GetImportProgressText(ProjectOverview project)
     {
         var importedPhotoCount = project.Iterations.FirstOrDefault()?.TotalPhotoCount ?? 0;
+        var skippedText = project.SkippedPhotoCount > 0
+            ? $" {project.SkippedPhotoCount} unreadable files skipped."
+            : string.Empty;
+
         return project.ImportStatus == ProjectImportStatus.Completed
-            ? $"{importedPhotoCount} photos imported and ready for review."
-            : $"{importedPhotoCount} photos imported so far.";
+            ? $"{importedPhotoCount} photos imported and ready for review.{skippedText}"
+            : $"{importedPhotoCount} photos imported so far.{skippedText}";
     }
 
     private static bool CanRestartImport(ProjectImportStatus importStatus) =>
