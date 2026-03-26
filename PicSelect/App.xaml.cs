@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml.Navigation;
+using PicSelect.Core.Projects;
 
 namespace PicSelect
 {
@@ -7,7 +8,7 @@ namespace PicSelect
     /// </summary>
     public partial class App : Application
     {
-        private Window window = Window.Current;
+        private Window? window;
 
         /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
@@ -16,7 +17,15 @@ namespace PicSelect
         public App()
         {
             this.InitializeComponent();
+            Store = new PicSelectStore(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "PicSelect",
+                "picselect.db"));
         }
+
+        public Window MainWindow => window ?? throw new InvalidOperationException("Main window has not been created yet.");
+
+        public PicSelectStore Store { get; }
 
         /// <summary>
         /// Invoked when the application is launched normally by the end user.  Other entry points
