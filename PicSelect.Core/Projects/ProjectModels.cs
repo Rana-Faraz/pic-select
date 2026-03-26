@@ -32,3 +32,14 @@ public sealed record IterationPhoto(
     long SizeBytes,
     DateTimeOffset LastModifiedUtc,
     string? DecisionType);
+
+public sealed record ReviewSession(
+    long ProjectId,
+    long IterationId,
+    int IterationNumber,
+    int CurrentPhotoIndex,
+    int ReviewedPhotoCount,
+    IReadOnlyList<IterationPhoto> Photos)
+{
+    public IterationPhoto CurrentPhoto => Photos[CurrentPhotoIndex];
+}

@@ -49,6 +49,8 @@
 
                 <ListView
                     x:Name="IterationsListView"
+                    IsItemClickEnabled="True"
+                    ItemClick="OnIterationInvoked"
                     SelectionMode="None">
                     <ListView.ItemTemplate>
                         <DataTemplate>

@@ -223,6 +223,147 @@ public sealed class PicSelectStore
         return await GetIterationPhotosByIterationIdAsync(connection, (long)(scalar), cancellationToken);
     }
 
+    public async Task<ReviewSession?> GetReviewSessionAsync(
+        long projectId,
+        int iterationNumber,
+        long? preferredPhotoId = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var iterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
+        if (iterationId is null)
+        {
+            return null;
+        }
+
+        var photos = await GetIterationPhotosByIterationIdAsync(connection, iterationId.Value, cancellationToken);
+        if (photos.Count == 0)
+        {
+            return null;
+        }
+
+        var currentPhotoId = preferredPhotoId.HasValue && photos.Any(photo => photo.PhotoId == preferredPhotoId.Value)
+            ? preferredPhotoId.Value
+            : photos.FirstOrDefault(photo => photo.DecisionType is null)?.PhotoId ?? photos[^1].PhotoId;
+
+        var currentPhotoIndex = photos.FindIndex(photo => photo.PhotoId == currentPhotoId);
+        if (currentPhotoIndex < 0)
+        {
+            currentPhotoIndex = 0;
+        }
+
+        return new ReviewSession(
+            projectId,
+            iterationId.Value,
+            iterationNumber,
+            currentPhotoIndex,
+            photos.Count(photo => photo.DecisionType is not null),
+            photos);
+    }
+
+    public async Task RecordDecisionAsync(
+        long projectId,
+        int iterationNumber,
+        long photoId,
+        string decisionType,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.Equals(decisionType, "choose", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(decisionType, "ignore", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentOutOfRangeException(nameof(decisionType), "Decision must be 'choose' or 'ignore'.");
+        }
+
+        await using var connection = OpenConnection();
+        var iterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
+        if (iterationId is null)
+        {
+            throw new InvalidOperationException("The requested iteration does not exist.");
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO DecisionEvents (ProjectId, IterationId, PhotoId, DecisionType, CreatedAtUtc)
+            VALUES ($projectId, $iterationId, $photoId, $decisionType, $createdAtUtc);
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId);
+        command.Parameters.AddWithValue("$iterationId", iterationId.Value);
+        command.Parameters.AddWithValue("$photoId", photoId);
+        command.Parameters.AddWithValue("$decisionType", decisionType.ToLowerInvariant());
+        command.Parameters.AddWithValue("$createdAtUtc", DateTimeOffset.UtcNow.ToString("O"));
+
+        _ = await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<long?> UndoLastDecisionAsync(
+        long projectId,
+        int iterationNumber,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var iterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
+        if (iterationId is null)
+        {
+            return null;
+        }
+
+        using var latestCommand = connection.CreateCommand();
+        latestCommand.CommandText =
+            """
+            SELECT Id, PhotoId
+            FROM DecisionEvents
+            WHERE ProjectId = $projectId AND IterationId = $iterationId
+            ORDER BY Id DESC
+            LIMIT 1;
+            """;
+        latestCommand.Parameters.AddWithValue("$projectId", projectId);
+        latestCommand.Parameters.AddWithValue("$iterationId", iterationId.Value);
+
+        await using var latestReader = await latestCommand.ExecuteReaderAsync(cancellationToken);
+        if (!await latestReader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        var latestEventId = latestReader.GetInt64(0);
+        var photoId = latestReader.GetInt64(1);
+
+        using var previousCommand = connection.CreateCommand();
+        previousCommand.CommandText =
+            """
+            SELECT DecisionType
+            FROM DecisionEvents
+            WHERE ProjectId = $projectId
+              AND IterationId = $iterationId
+              AND PhotoId = $photoId
+              AND Id < $latestEventId
+            ORDER BY Id DESC
+            LIMIT 1;
+            """;
+        previousCommand.Parameters.AddWithValue("$projectId", projectId);
+        previousCommand.Parameters.AddWithValue("$iterationId", iterationId.Value);
+        previousCommand.Parameters.AddWithValue("$photoId", photoId);
+        previousCommand.Parameters.AddWithValue("$latestEventId", latestEventId);
+
+        var previousDecision = (string?)await previousCommand.ExecuteScalarAsync(cancellationToken) ?? "undecided";
+
+        using var insertCommand = connection.CreateCommand();
+        insertCommand.CommandText =
+            """
+            INSERT INTO DecisionEvents (ProjectId, IterationId, PhotoId, DecisionType, CreatedAtUtc)
+            VALUES ($projectId, $iterationId, $photoId, $decisionType, $createdAtUtc);
+            """;
+        insertCommand.Parameters.AddWithValue("$projectId", projectId);
+        insertCommand.Parameters.AddWithValue("$iterationId", iterationId.Value);
+        insertCommand.Parameters.AddWithValue("$photoId", photoId);
+        insertCommand.Parameters.AddWithValue("$decisionType", previousDecision);
+        insertCommand.Parameters.AddWithValue("$createdAtUtc", DateTimeOffset.UtcNow.ToString("O"));
+
+        _ = await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+        return photoId;
+    }
+
     private static async Task<long> ExecuteInsertAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -354,10 +495,32 @@ public sealed class PicSelectStore
                 reader.GetString(2),
                 reader.GetInt64(3),
                 DateTimeOffset.Parse(reader.GetString(4)),
-                reader.IsDBNull(5) ? null : reader.GetString(5)));
+                reader.IsDBNull(5) || string.Equals(reader.GetString(5), "undecided", StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : reader.GetString(5)));
         }
 
         return photos;
+    }
+
+    private static async Task<long?> TryGetIterationIdAsync(
+        SqliteConnection connection,
+        long projectId,
+        int iterationNumber,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT Id
+            FROM Iterations
+            WHERE ProjectId = $projectId AND Number = $iterationNumber;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId);
+        command.Parameters.AddWithValue("$iterationNumber", iterationNumber);
+
+        var scalar = await command.ExecuteScalarAsync(cancellationToken);
+        return scalar is null ? null : Convert.ToInt64(scalar);
     }
 
     private SqliteConnection OpenConnection()

@@ -1,11 +1,13 @@
 using Microsoft.UI.Xaml.Navigation;
 using PicSelect.Core.Projects;
+using PicSelect.Navigation;
 
 namespace PicSelect.Views;
 
 public sealed partial class ProjectDetailPage : Page
 {
     private readonly PicSelectStore store;
+    private long currentProjectId;
 
     public ProjectDetailPage()
     {
@@ -30,6 +32,7 @@ public sealed partial class ProjectDetailPage : Page
             return;
         }
 
+        currentProjectId = project.ProjectId;
         MissingProjectBorder.Visibility = Visibility.Collapsed;
         IterationsListView.Visibility = Visibility.Visible;
         ProjectNameTextBlock.Text = project.DisplayName;
@@ -47,11 +50,22 @@ public sealed partial class ProjectDetailPage : Page
 
     private void ShowMissingProject()
     {
+        currentProjectId = 0;
         ProjectNameTextBlock.Text = "Project unavailable";
         FolderPathTextBlock.Text = string.Empty;
         IterationsListView.ItemsSource = null;
         IterationsListView.Visibility = Visibility.Collapsed;
         MissingProjectBorder.Visibility = Visibility.Visible;
+    }
+
+    private void OnIterationInvoked(object sender, ItemClickEventArgs e)
+    {
+        if (currentProjectId == 0 || e.ClickedItem is not IterationSummary iteration)
+        {
+            return;
+        }
+
+        Frame.Navigate(typeof(ReviewPage), new ReviewNavigationArgs(currentProjectId, iteration.Number));
     }
 
     private static bool TryGetProjectId(object parameter, out long projectId)
