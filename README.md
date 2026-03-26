@@ -141,6 +141,11 @@ PicSelect is usable now, but still early. Some likely next steps:
 - richer gallery performance tuning for extremely large projects
 - stronger installer polish and upgrade handling
 
+## Author
+
+- Rana Faraz
+- GitHub: [@Rana-Faraz](https://github.com/Rana-Faraz)
+
 ## License
 
-No license file is included yet.
+Licensed under the [MIT License](https://github.com/Rana-Faraz/pic-select/blob/master/LICENSE).
