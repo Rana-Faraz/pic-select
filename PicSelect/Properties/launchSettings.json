@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "PicSelect (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "PicSelect (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
