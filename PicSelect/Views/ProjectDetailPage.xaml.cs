@@ -65,6 +65,12 @@ public sealed partial class ProjectDetailPage : Page
             return;
         }
 
+        if (iteration.TotalPhotoCount > 0 && iteration.ReviewedPhotoCount == iteration.TotalPhotoCount)
+        {
+            Frame.Navigate(typeof(IterationGalleryPage), new ProjectIterationNavigationArgs(currentProjectId, iteration.Number));
+            return;
+        }
+
         Frame.Navigate(typeof(ReviewPage), new ReviewNavigationArgs(currentProjectId, iteration.Number));
     }
 

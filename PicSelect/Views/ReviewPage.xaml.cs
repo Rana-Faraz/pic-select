@@ -93,6 +93,10 @@ public sealed partial class ReviewPage : Page
             : currentPhoto.PhotoId;
 
         await LoadSessionAsync(nextPhotoId);
+        if (session is not null && session.ReviewedPhotoCount == session.Photos.Count)
+        {
+            Frame.Navigate(typeof(IterationSummaryPage), new ProjectIterationNavigationArgs(projectId, iterationNumber));
+        }
     }
 
     private async Task LoadSessionAsync(long? preferredPhotoId = null)

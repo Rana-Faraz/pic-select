@@ -364,6 +364,79 @@ public sealed class PicSelectStore
         return photoId;
     }
 
+    public async Task<IterationSummary> CreateNextIterationAsync(
+        long projectId,
+        int iterationNumber,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var currentIterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
+        if (currentIterationId is null)
+        {
+            throw new InvalidOperationException("The requested iteration does not exist.");
+        }
+
+        var currentPhotos = await GetIterationPhotosByIterationIdAsync(connection, currentIterationId.Value, cancellationToken);
+        if (currentPhotos.Any(photo => photo.DecisionType is null))
+        {
+            throw new InvalidOperationException("The current iteration must be fully decided before creating the next iteration.");
+        }
+
+        var nextIterationNumber = iterationNumber + 1;
+        var existingNextIterationId = await TryGetIterationIdAsync(connection, projectId, nextIterationNumber, cancellationToken);
+        if (existingNextIterationId is not null)
+        {
+            var existingPhotos = await GetIterationPhotosByIterationIdAsync(connection, existingNextIterationId.Value, cancellationToken);
+            return new IterationSummary(
+                existingNextIterationId.Value,
+                nextIterationNumber,
+                existingPhotos.Count,
+                existingPhotos.Count(photo => photo.DecisionType is not null),
+                existingPhotos.Count(photo => string.Equals(photo.DecisionType, "choose", StringComparison.OrdinalIgnoreCase)),
+                existingPhotos.Count(photo => string.Equals(photo.DecisionType, "ignore", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        var chosenPhotos = currentPhotos
+            .Where(photo => string.Equals(photo.DecisionType, "choose", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        var createdAtUtc = DateTimeOffset.UtcNow.ToString("O");
+        var nextIterationId = await ExecuteInsertAsync(
+            connection,
+            transaction,
+            """
+            INSERT INTO Iterations (ProjectId, Number, CreatedAtUtc)
+            VALUES ($projectId, $iterationNumber, $createdAtUtc);
+            SELECT last_insert_rowid();
+            """,
+            cancellationToken,
+            ("$projectId", (object)projectId),
+            ("$iterationNumber", (object)nextIterationNumber),
+            ("$createdAtUtc", (object)createdAtUtc));
+
+        foreach (var photo in chosenPhotos)
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                INSERT INTO MembershipEvents (ProjectId, IterationId, PhotoId, EventType, CreatedAtUtc)
+                VALUES ($projectId, $iterationId, $photoId, 'include', $createdAtUtc);
+                """,
+                cancellationToken,
+                ("$projectId", (object)projectId),
+                ("$iterationId", (object)nextIterationId),
+                ("$photoId", (object)photo.PhotoId),
+                ("$createdAtUtc", (object)createdAtUtc));
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+
+        return new IterationSummary(nextIterationId, nextIterationNumber, chosenPhotos.Count, 0, 0, 0);
+    }
+
     private static async Task<long> ExecuteInsertAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Page
+    x:Class="PicSelect.Views.IterationGalleryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <Page.Content>
+        <Grid Padding="24" RowSpacing="16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <CommandBar DefaultLabelPosition="Right">
+                <AppBarButton Click="OnBackClicked" Icon="Back" Label="Back" />
+            </CommandBar>
+
+            <TextBlock
+                Grid.Row="1"
+                x:Name="HeaderTextBlock"
+                FontSize="28"
+                FontWeight="SemiBold"
+                Text="Iteration gallery" />
+
+            <GridView
+                Grid.Row="2"
+                x:Name="GalleryGridView"
+                IsItemClickEnabled="True"
+                ItemClick="OnPhotoInvoked"
+                SelectionMode="None">
+                <GridView.ItemTemplate>
+                    <DataTemplate>
+                        <Border
+                            Margin="0,0,12,12"
+                            Padding="12"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="12">
+                            <StackPanel Width="220">
+                                <Border
+                                    Height="160"
+                                    Background="#101214"
+                                    CornerRadius="8">
+                                    <Image
+                                        Height="160"
+                                        Source="{Binding PreviewUri}"
+                                        Stretch="UniformToFill" />
+                                </Border>
+                                <TextBlock
+                                    Margin="0,10,0,0"
+                                    FontWeight="SemiBold"
+                                    Text="{Binding FileName}"
+                                    TextTrimming="CharacterEllipsis" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{Binding DecisionLabel}" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </GridView.ItemTemplate>
+            </GridView>
+        </Grid>
+    </Page.Content>
+</Page>

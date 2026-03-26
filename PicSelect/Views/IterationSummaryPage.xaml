@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Page
+    x:Class="PicSelect.Views.IterationSummaryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <Page.Content>
+        <Grid Padding="32" RowSpacing="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock
+                x:Name="HeaderTextBlock"
+                FontSize="30"
+                FontWeight="SemiBold"
+                Text="Iteration complete" />
+
+            <Border
+                Grid.Row="1"
+                Padding="20"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="12">
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        x:Name="TotalTextBlock"
+                        Text="Total: 0" />
+                    <TextBlock
+                        x:Name="ChosenTextBlock"
+                        Text="Chosen: 0" />
+                    <TextBlock
+                        x:Name="IgnoredTextBlock"
+                        Text="Ignored: 0" />
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="2" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Button
+                    x:Name="StartNextIterationButton"
+                    Click="OnStartNextIterationClicked"
+                    Content="Start Next Iteration"
+                    Style="{StaticResource AccentButtonStyle}" />
+                <Button
+                    Grid.Column="1"
+                    Click="OnReturnToProjectClicked"
+                    Content="Return to Project" />
+            </Grid>
+        </Grid>
+    </Page.Content>
+</Page>
