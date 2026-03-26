@@ -437,6 +437,93 @@ public sealed class PicSelectStore
         return new IterationSummary(nextIterationId, nextIterationNumber, chosenPhotos.Count, 0, 0, 0);
     }
 
+    public async Task PromotePhotoToIterationAsync(
+        long projectId,
+        long photoId,
+        int targetIterationNumber,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var iterationNumbers = await GetIterationNumbersAsync(connection, projectId, cancellationToken);
+        if (!iterationNumbers.Contains(targetIterationNumber))
+        {
+            throw new InvalidOperationException("The target iteration does not exist.");
+        }
+
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var createdAtUtc = DateTimeOffset.UtcNow.ToString("O");
+
+        foreach (var iterationNumber in iterationNumbers.Where(number => number <= targetIterationNumber))
+        {
+            var iterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
+            if (iterationId is null)
+            {
+                continue;
+            }
+
+            if (await IsPhotoIncludedInIterationAsync(connection, transaction, iterationId.Value, photoId, cancellationToken))
+            {
+                continue;
+            }
+
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                INSERT INTO MembershipEvents (ProjectId, IterationId, PhotoId, EventType, CreatedAtUtc)
+                VALUES ($projectId, $iterationId, $photoId, 'include', $createdAtUtc);
+                """,
+                cancellationToken,
+                ("$projectId", (object)projectId),
+                ("$iterationId", (object)iterationId.Value),
+                ("$photoId", (object)photoId),
+                ("$createdAtUtc", (object)createdAtUtc));
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task RemovePhotoFromIterationAsync(
+        long projectId,
+        long photoId,
+        int startingIterationNumber,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var iterationNumbers = await GetIterationNumbersAsync(connection, projectId, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var createdAtUtc = DateTimeOffset.UtcNow.ToString("O");
+
+        foreach (var iterationNumber in iterationNumbers.Where(number => number >= startingIterationNumber))
+        {
+            var iterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
+            if (iterationId is null)
+            {
+                continue;
+            }
+
+            if (!await IsPhotoIncludedInIterationAsync(connection, transaction, iterationId.Value, photoId, cancellationToken))
+            {
+                continue;
+            }
+
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                INSERT INTO MembershipEvents (ProjectId, IterationId, PhotoId, EventType, CreatedAtUtc)
+                VALUES ($projectId, $iterationId, $photoId, 'remove', $createdAtUtc);
+                """,
+                cancellationToken,
+                ("$projectId", (object)projectId),
+                ("$iterationId", (object)iterationId.Value),
+                ("$photoId", (object)photoId),
+                ("$createdAtUtc", (object)createdAtUtc));
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     private static async Task<long> ExecuteInsertAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -594,6 +681,55 @@ public sealed class PicSelectStore
 
         var scalar = await command.ExecuteScalarAsync(cancellationToken);
         return scalar is null ? null : Convert.ToInt64(scalar);
+    }
+
+    private static async Task<List<int>> GetIterationNumbersAsync(
+        SqliteConnection connection,
+        long projectId,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT Number
+            FROM Iterations
+            WHERE ProjectId = $projectId
+            ORDER BY Number;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId);
+
+        var numbers = new List<int>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            numbers.Add(reader.GetInt32(0));
+        }
+
+        return numbers;
+    }
+
+    private static async Task<bool> IsPhotoIncludedInIterationAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long iterationId,
+        long photoId,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT EventType
+            FROM MembershipEvents
+            WHERE IterationId = $iterationId AND PhotoId = $photoId
+            ORDER BY Id DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$iterationId", iterationId);
+        command.Parameters.AddWithValue("$photoId", photoId);
+
+        var scalar = (string?)await command.ExecuteScalarAsync(cancellationToken);
+        return string.Equals(scalar, "include", StringComparison.OrdinalIgnoreCase);
     }
 
     private SqliteConnection OpenConnection()

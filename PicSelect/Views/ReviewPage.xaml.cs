@@ -70,6 +70,40 @@ public sealed partial class ReviewPage : Page
         await LoadSessionAsync(undonePhotoId);
     }
 
+    private async void OnPromoteClicked(object sender, RoutedEventArgs e)
+    {
+        if (session is null)
+        {
+            return;
+        }
+
+        var targetIteration = await SelectLaterIterationAsync(includeCurrentMembership: false, "Promote to later iteration", "Promote");
+        if (targetIteration is null)
+        {
+            return;
+        }
+
+        await store.PromotePhotoToIterationAsync(projectId, session.CurrentPhoto.PhotoId, targetIteration.Value);
+        ReviewHintTextBlock.Text = $"Added this photo through iteration {targetIteration.Value}.";
+    }
+
+    private async void OnRemoveLaterClicked(object sender, RoutedEventArgs e)
+    {
+        if (session is null)
+        {
+            return;
+        }
+
+        var targetIteration = await SelectLaterIterationAsync(includeCurrentMembership: true, "Remove from later iterations", "Remove");
+        if (targetIteration is null)
+        {
+            return;
+        }
+
+        await store.RemovePhotoFromIterationAsync(projectId, session.CurrentPhoto.PhotoId, targetIteration.Value);
+        ReviewHintTextBlock.Text = $"Removed this photo from iteration {targetIteration.Value} and later.";
+    }
+
     private void OnBackClicked(object sender, RoutedEventArgs e)
     {
         if (Frame.CanGoBack)
@@ -122,6 +156,61 @@ public sealed partial class ReviewPage : Page
         NextButton.IsEnabled = session.CurrentPhotoIndex < session.Photos.Count - 1;
 
         await LoadImageAsync(session.CurrentPhoto.FilePath);
+    }
+
+    private async Task<int?> SelectLaterIterationAsync(bool includeCurrentMembership, string title, string primaryButtonText)
+    {
+        if (session is null)
+        {
+            return null;
+        }
+
+        var project = await store.GetProjectOverviewAsync(projectId);
+        if (project is null)
+        {
+            return null;
+        }
+
+        var laterIterations = new List<int>();
+        foreach (var iteration in project.Iterations.Where(item => item.Number > iterationNumber))
+        {
+            var photos = await store.GetIterationPhotosAsync(projectId, iteration.Number);
+            var containsPhoto = photos.Any(photo => photo.PhotoId == session.CurrentPhoto.PhotoId);
+            if (containsPhoto == includeCurrentMembership)
+            {
+                laterIterations.Add(iteration.Number);
+            }
+        }
+
+        if (laterIterations.Count == 0)
+        {
+            ReviewHintTextBlock.Text = includeCurrentMembership
+                ? "This photo is not in any later iteration."
+                : "No later iteration is available for promotion.";
+            return null;
+        }
+
+        var comboBox = new ComboBox
+        {
+            ItemsSource = laterIterations,
+            SelectedIndex = 0,
+            MinWidth = 220,
+        };
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = comboBox,
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        var result = await dialog.ShowAsync();
+        return result == ContentDialogResult.Primary && comboBox.SelectedItem is int selectedIteration
+            ? selectedIteration
+            : null;
     }
 
     private async Task LoadImageAsync(string filePath)

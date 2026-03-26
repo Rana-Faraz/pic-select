@@ -18,6 +18,8 @@
             <CommandBar DefaultLabelPosition="Right">
                 <AppBarButton Click="OnBackClicked" Icon="Back" Label="Back" />
                 <AppBarButton Click="OnUndoClicked" Icon="Undo" Label="Undo" />
+                <AppBarButton Click="OnPromoteClicked" Icon="Add" Label="Promote" />
+                <AppBarButton Click="OnRemoveLaterClicked" Icon="Remove" Label="Remove Later" />
             </CommandBar>
 
             <Grid Grid.Row="1" ColumnSpacing="16">
