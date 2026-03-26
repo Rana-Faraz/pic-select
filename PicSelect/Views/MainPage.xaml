@@ -22,7 +22,7 @@
                     Text="PicSelect" />
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Create a non-destructive project from a top-level folder of photos." />
+                    Text="Create a non-destructive project from a photo folder and track whether its snapshot is ready for review." />
             </StackPanel>
 
             <StackPanel
@@ -92,6 +92,11 @@
                                             FontSize="18"
                                             FontWeight="SemiBold"
                                             Text="{Binding DisplayName}" />
+                                        <TextBlock
+                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}">
+                                            <Run Text="Status: " />
+                                            <Run Text="{Binding ImportStatus}" />
+                                        </TextBlock>
                                         <TextBlock
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             Text="{Binding FolderPath}"

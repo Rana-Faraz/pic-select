@@ -25,6 +25,9 @@
                     FontWeight="SemiBold"
                     Text="Project" />
                 <TextBlock
+                    x:Name="ImportStatusTextBlock"
+                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                <TextBlock
                     x:Name="FolderPathTextBlock"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                     TextWrapping="WrapWholeWords" />
@@ -35,6 +38,19 @@
                     FontSize="18"
                     FontWeight="SemiBold"
                     Text="Iterations" />
+
+                <Border
+                    x:Name="ImportStateBorder"
+                    Padding="20"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Visibility="Collapsed">
+                    <TextBlock
+                        x:Name="ImportHintTextBlock"
+                        TextWrapping="WrapWholeWords" />
+                </Border>
 
                 <Border
                     x:Name="MissingProjectBorder"

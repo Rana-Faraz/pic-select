@@ -26,6 +26,37 @@ public sealed class PicSelectStore
         EnsureSchema();
     }
 
+    public async Task<CreatedProject> CreateProjectAsync(string folderPath, CancellationToken cancellationToken = default)
+    {
+        var normalizedFolderPath = Path.GetFullPath(folderPath);
+        if (!Directory.Exists(normalizedFolderPath))
+        {
+            throw new DirectoryNotFoundException($"Folder '{normalizedFolderPath}' does not exist.");
+        }
+
+        await using var connection = OpenConnection();
+        var existingProject = await TryGetExistingProjectSummaryByFolderAsync(connection, normalizedFolderPath, cancellationToken);
+        if (existingProject is not null)
+        {
+            return new CreatedProject(existingProject.ProjectId, existingProject.FolderPath, existingProject.ImportStatus, AlreadyExisted: true);
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO Projects (FolderPath, DisplayName, ImportedAtUtc, ImportStatus)
+            VALUES ($folderPath, $displayName, $importedAtUtc, $importStatus);
+            SELECT last_insert_rowid();
+            """;
+        command.Parameters.AddWithValue("$folderPath", normalizedFolderPath);
+        command.Parameters.AddWithValue("$displayName", Path.GetFileName(normalizedFolderPath));
+        command.Parameters.AddWithValue("$importedAtUtc", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$importStatus", ProjectImportStatus.Pending.ToString());
+
+        var projectId = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken));
+        return new CreatedProject(projectId, normalizedFolderPath, ProjectImportStatus.Pending, AlreadyExisted: false);
+    }
+
     public async Task<ImportedProject> ImportProjectFromFolderAsync(string folderPath, CancellationToken cancellationToken = default)
     {
         var normalizedFolderPath = Path.GetFullPath(folderPath);
@@ -35,30 +66,17 @@ public sealed class PicSelectStore
         }
 
         await using var connection = OpenConnection();
-
-        var existing = await TryGetExistingProjectAsync(connection, normalizedFolderPath, cancellationToken);
-        if (existing is not null)
+        var existingProject = await TryGetExistingProjectSummaryByFolderAsync(connection, normalizedFolderPath, cancellationToken);
+        if (existingProject is not null && existingProject.ImportStatus == ProjectImportStatus.Completed)
         {
-            return existing with { AlreadyExisted = true };
+            return new ImportedProject(existingProject.ProjectId, existingProject.FolderPath, existingProject.PhotoCount, AlreadyExisted: true);
         }
 
         var files = EnumerateSupportedFiles(normalizedFolderPath);
         var importedAtUtc = DateTimeOffset.UtcNow;
+        var projectId = existingProject?.ProjectId ?? (await CreateProjectAsync(normalizedFolderPath, cancellationToken)).ProjectId;
 
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-
-        var projectId = await ExecuteInsertAsync(
-            connection,
-            transaction,
-            """
-            INSERT INTO Projects (FolderPath, DisplayName, ImportedAtUtc)
-            VALUES ($folderPath, $displayName, $importedAtUtc);
-            SELECT last_insert_rowid();
-            """,
-            cancellationToken,
-            ("$folderPath", normalizedFolderPath),
-            ("$displayName", Path.GetFileName(normalizedFolderPath)),
-            ("$importedAtUtc", importedAtUtc.ToString("O")));
 
         var iterationId = await ExecuteInsertAsync(
             connection,
@@ -104,6 +122,18 @@ public sealed class PicSelectStore
                 ("$createdAtUtc", (object)importedAtUtc.ToString("O")));
         }
 
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            UPDATE Projects
+            SET ImportStatus = $importStatus
+            WHERE Id = $projectId;
+            """,
+            cancellationToken,
+            ("$importStatus", (object)ProjectImportStatus.Completed.ToString()),
+            ("$projectId", (object)projectId));
+
         await transaction.CommitAsync(cancellationToken);
         return new ImportedProject(projectId, normalizedFolderPath, files.Count, AlreadyExisted: false);
     }
@@ -119,6 +149,7 @@ public sealed class PicSelectStore
                 p.FolderPath,
                 p.DisplayName,
                 p.ImportedAtUtc,
+                p.ImportStatus,
                 COUNT(DISTINCT ph.Id) AS PhotoCount,
                 COALESCE(MAX(i.Number), 0) AS IterationCount
             FROM Projects p
@@ -137,8 +168,9 @@ public sealed class PicSelectStore
                 reader.GetString(1),
                 reader.GetString(2),
                 DateTimeOffset.Parse(reader.GetString(3)),
-                reader.GetInt32(4),
-                reader.GetInt32(5)));
+                ParseProjectImportStatus(reader.GetString(4)),
+                reader.GetInt32(5),
+                reader.GetInt32(6)));
         }
 
         return projects;
@@ -150,7 +182,7 @@ public sealed class PicSelectStore
         using var projectCommand = connection.CreateCommand();
         projectCommand.CommandText =
             """
-            SELECT Id, FolderPath, DisplayName, ImportedAtUtc
+            SELECT Id, FolderPath, DisplayName, ImportedAtUtc, ImportStatus
             FROM Projects
             WHERE Id = $projectId;
             """;
@@ -165,6 +197,7 @@ public sealed class PicSelectStore
         var folderPath = projectReader.GetString(1);
         var displayName = projectReader.GetString(2);
         var importedAtUtc = DateTimeOffset.Parse(projectReader.GetString(3));
+        var importStatus = ParseProjectImportStatus(projectReader.GetString(4));
 
         var iterations = new List<IterationSummary>();
         using var iterationCommand = connection.CreateCommand();
@@ -195,7 +228,7 @@ public sealed class PicSelectStore
                 ignoredCount));
         }
 
-        return new ProjectOverview(projectId, folderPath, displayName, importedAtUtc, iterations);
+        return new ProjectOverview(projectId, folderPath, displayName, importedAtUtc, importStatus, iterations);
     }
 
     public async Task<IReadOnlyList<IterationPhoto>> GetIterationPhotosAsync(
@@ -230,6 +263,11 @@ public sealed class PicSelectStore
         CancellationToken cancellationToken = default)
     {
         await using var connection = OpenConnection();
+        if (await GetProjectImportStatusAsync(connection, projectId, cancellationToken) != ProjectImportStatus.Completed)
+        {
+            return null;
+        }
+
         var iterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
         if (iterationId is null)
         {
@@ -573,7 +611,25 @@ public sealed class PicSelectStore
             .ToList();
     }
 
-    private async Task<ImportedProject?> TryGetExistingProjectAsync(
+    private static async Task<ProjectImportStatus> GetProjectImportStatusAsync(
+        SqliteConnection connection,
+        long projectId,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT ImportStatus
+            FROM Projects
+            WHERE Id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId);
+
+        var scalar = (string?)await command.ExecuteScalarAsync(cancellationToken) ?? ProjectImportStatus.Pending.ToString();
+        return ParseProjectImportStatus(scalar);
+    }
+
+    private static async Task<ProjectSummary?> TryGetExistingProjectSummaryByFolderAsync(
         SqliteConnection connection,
         string folderPath,
         CancellationToken cancellationToken)
@@ -581,11 +637,19 @@ public sealed class PicSelectStore
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT p.Id, p.FolderPath, COUNT(ph.Id)
+            SELECT
+                p.Id,
+                p.FolderPath,
+                p.DisplayName,
+                p.ImportedAtUtc,
+                p.ImportStatus,
+                COUNT(DISTINCT ph.Id) AS PhotoCount,
+                COALESCE(MAX(i.Number), 0) AS IterationCount
             FROM Projects p
             LEFT JOIN Photos ph ON ph.ProjectId = p.Id
+            LEFT JOIN Iterations i ON i.ProjectId = p.Id
             WHERE p.FolderPath = $folderPath
-            GROUP BY p.Id, p.FolderPath;
+            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc, p.ImportStatus;
             """;
         command.Parameters.AddWithValue("$folderPath", folderPath);
 
@@ -595,11 +659,14 @@ public sealed class PicSelectStore
             return null;
         }
 
-        return new ImportedProject(
+        return new ProjectSummary(
             reader.GetInt64(0),
             reader.GetString(1),
-            reader.GetInt32(2),
-            AlreadyExisted: true);
+            reader.GetString(2),
+            DateTimeOffset.Parse(reader.GetString(3)),
+            ParseProjectImportStatus(reader.GetString(4)),
+            reader.GetInt32(5),
+            reader.GetInt32(6));
     }
 
     private async Task<List<IterationPhoto>> GetIterationPhotosByIterationIdAsync(
@@ -751,7 +818,8 @@ public sealed class PicSelectStore
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 FolderPath TEXT NOT NULL UNIQUE,
                 DisplayName TEXT NOT NULL,
-                ImportedAtUtc TEXT NOT NULL
+                ImportedAtUtc TEXT NOT NULL,
+                ImportStatus TEXT NOT NULL DEFAULT 'Completed'
             );
 
             CREATE TABLE IF NOT EXISTS Photos (
@@ -811,5 +879,39 @@ public sealed class PicSelectStore
             """;
 
         _ = command.ExecuteNonQuery();
+        EnsureColumnExists(connection, "Projects", "ImportStatus", "TEXT NOT NULL DEFAULT 'Completed'");
+    }
+
+    private static ProjectImportStatus ParseProjectImportStatus(string statusText)
+    {
+        return Enum.TryParse<ProjectImportStatus>(statusText, ignoreCase: true, out var status)
+            ? status
+            : ProjectImportStatus.Pending;
+    }
+
+    private static void EnsureColumnExists(SqliteConnection connection, string tableName, string columnName, string definition)
+    {
+        using var pragmaCommand = connection.CreateCommand();
+        pragmaCommand.CommandText = $"PRAGMA table_info({tableName});";
+
+        var exists = false;
+        using var reader = pragmaCommand.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                exists = true;
+                break;
+            }
+        }
+
+        if (exists)
+        {
+            return;
+        }
+
+        using var alterCommand = connection.CreateCommand();
+        alterCommand.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
+        _ = alterCommand.ExecuteNonQuery();
     }
 }

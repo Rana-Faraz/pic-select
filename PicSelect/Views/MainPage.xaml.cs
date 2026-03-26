@@ -29,6 +29,13 @@ namespace PicSelect.Views
                     return;
                 }
 
+                var createdProject = await store.CreateProjectAsync(folderPath);
+                await LoadProjectsAsync();
+
+                StatusTextBlock.Text = createdProject.AlreadyExisted
+                    ? $"Project already exists for '{createdProject.FolderPath}'. Opening the saved snapshot."
+                    : $"Created project for '{createdProject.FolderPath}'. Importing the snapshot now.";
+
                 var importedProject = await store.ImportProjectFromFolderAsync(folderPath);
                 await LoadProjectsAsync();
 
@@ -41,6 +48,7 @@ namespace PicSelect.Views
             catch (Exception exception)
             {
                 StatusTextBlock.Text = $"Import failed: {exception.Message}";
+                await LoadProjectsAsync();
             }
             finally
             {
