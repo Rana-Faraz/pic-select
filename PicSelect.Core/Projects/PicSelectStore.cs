@@ -4,6 +4,8 @@ namespace PicSelect.Core.Projects;
 
 public sealed class PicSelectStore
 {
+    private const int ImportBatchSize = 500;
+
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg",
@@ -59,25 +61,108 @@ public sealed class PicSelectStore
 
     public async Task<ImportedProject> ImportProjectFromFolderAsync(string folderPath, CancellationToken cancellationToken = default)
     {
+        return await ImportProjectFromFolderAsync(folderPath, progress: null, cancellationToken);
+    }
+
+    public async Task<ImportedProject> ImportProjectFromFolderAsync(
+        string folderPath,
+        IProgress<ProjectImportProgress>? progress,
+        CancellationToken cancellationToken = default)
+    {
         var normalizedFolderPath = Path.GetFullPath(folderPath);
         if (!Directory.Exists(normalizedFolderPath))
         {
             throw new DirectoryNotFoundException($"Folder '{normalizedFolderPath}' does not exist.");
         }
 
-        await using var connection = OpenConnection();
-        var existingProject = await TryGetExistingProjectSummaryByFolderAsync(connection, normalizedFolderPath, cancellationToken);
-        if (existingProject is not null && existingProject.ImportStatus == ProjectImportStatus.Completed)
+        var createdProject = await CreateProjectAsync(normalizedFolderPath, cancellationToken);
+        if (createdProject.AlreadyExisted && createdProject.ImportStatus == ProjectImportStatus.Completed)
         {
+            await using var connection = OpenConnection();
+            var existingProject = await TryGetProjectSummaryByIdAsync(connection, createdProject.ProjectId, cancellationToken)
+                ?? throw new InvalidOperationException("The completed project could not be reloaded.");
+
             return new ImportedProject(existingProject.ProjectId, existingProject.FolderPath, existingProject.PhotoCount, AlreadyExisted: true);
         }
 
-        var files = EnumerateSupportedFiles(normalizedFolderPath);
-        var importedAtUtc = DateTimeOffset.UtcNow;
-        var projectId = existingProject?.ProjectId ?? (await CreateProjectAsync(normalizedFolderPath, cancellationToken)).ProjectId;
+        return await RunProjectImportAsync(createdProject.ProjectId, progress, cancellationToken);
+    }
+
+    public async Task<ImportedProject> RunProjectImportAsync(
+        long projectId,
+        IProgress<ProjectImportProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var project = await TryGetProjectSummaryByIdAsync(connection, projectId, cancellationToken)
+            ?? throw new InvalidOperationException("The requested project does not exist.");
+
+        if (project.ImportStatus == ProjectImportStatus.Completed)
+        {
+            return new ImportedProject(project.ProjectId, project.FolderPath, project.PhotoCount, AlreadyExisted: true);
+        }
+
+        var startedAtUtc = project.ImportedAtUtc;
+        await UpdateProjectStatusAsync(connection, projectId, ProjectImportStatus.Scanning, cancellationToken);
+        progress?.Report(new ProjectImportProgress(projectId, ProjectImportStatus.Scanning, project.PhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+
+        var iterationId = await EnsureIterationOneAsync(connection, projectId, startedAtUtc, cancellationToken);
+        var importedPhotoCount = project.PhotoCount;
+        var batch = new List<DiscoveredPhoto>(ImportBatchSize);
+        var status = ProjectImportStatus.Scanning;
+
+        foreach (var file in EnumerateSupportedFiles(project.FolderPath))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            batch.Add(file);
+
+            if (batch.Count < ImportBatchSize)
+            {
+                continue;
+            }
+
+            if (status != ProjectImportStatus.Importing)
+            {
+                status = ProjectImportStatus.Importing;
+                await UpdateProjectStatusAsync(connection, projectId, status, cancellationToken);
+            }
+
+            importedPhotoCount += await PersistImportBatchAsync(connection, projectId, iterationId, batch, startedAtUtc, cancellationToken);
+            batch.Clear();
+            progress?.Report(new ProjectImportProgress(projectId, status, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+        }
+
+        if (batch.Count > 0)
+        {
+            if (status != ProjectImportStatus.Importing)
+            {
+                status = ProjectImportStatus.Importing;
+                await UpdateProjectStatusAsync(connection, projectId, status, cancellationToken);
+            }
+
+            importedPhotoCount += await PersistImportBatchAsync(connection, projectId, iterationId, batch, startedAtUtc, cancellationToken);
+            progress?.Report(new ProjectImportProgress(projectId, status, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+        }
+
+        await UpdateProjectStatusAsync(connection, projectId, ProjectImportStatus.Completed, cancellationToken);
+        progress?.Report(new ProjectImportProgress(projectId, ProjectImportStatus.Completed, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+
+        return new ImportedProject(projectId, project.FolderPath, importedPhotoCount, AlreadyExisted: false);
+    }
+
+    private static async Task<long> EnsureIterationOneAsync(
+        SqliteConnection connection,
+        long projectId,
+        DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken)
+    {
+        var existingIterationId = await TryGetIterationIdAsync(connection, projectId, 1, cancellationToken);
+        if (existingIterationId is not null)
+        {
+            return existingIterationId.Value;
+        }
 
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-
         var iterationId = await ExecuteInsertAsync(
             connection,
             transaction,
@@ -88,25 +173,41 @@ public sealed class PicSelectStore
             """,
             cancellationToken,
             ("$projectId", projectId),
-            ("$createdAtUtc", importedAtUtc.ToString("O")));
+            ("$createdAtUtc", createdAtUtc.ToString("O")));
 
-        foreach (var file in files)
+        await transaction.CommitAsync(cancellationToken);
+        return iterationId;
+    }
+
+    private static async Task<int> PersistImportBatchAsync(
+        SqliteConnection connection,
+        long projectId,
+        long iterationId,
+        IReadOnlyList<DiscoveredPhoto> batch,
+        DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        foreach (var file in batch)
         {
             var photoId = await ExecuteInsertAsync(
                 connection,
                 transaction,
                 """
-                INSERT INTO Photos (ProjectId, FilePath, FileName, SortName, SizeBytes, LastModifiedUtc)
-                VALUES ($projectId, $filePath, $fileName, $sortName, $sizeBytes, $lastModifiedUtc);
+                INSERT INTO Photos (ProjectId, FilePath, RelativePath, FileName, SortName, SortPath, SizeBytes, LastModifiedUtc)
+                VALUES ($projectId, $filePath, $relativePath, $fileName, $sortName, $sortPath, $sizeBytes, $lastModifiedUtc);
                 SELECT last_insert_rowid();
                 """,
                 cancellationToken,
                 ("$projectId", projectId),
-                ("$filePath", file.FullName),
-                ("$fileName", file.Name),
-                ("$sortName", file.Name.ToUpperInvariant()),
-            ("$sizeBytes", (object)file.Length),
-            ("$lastModifiedUtc", (object)file.LastWriteTimeUtc.ToString("O")));
+                ("$filePath", file.AbsolutePath),
+                ("$relativePath", file.RelativePath),
+                ("$fileName", file.FileName),
+                ("$sortName", file.FileName.ToUpperInvariant()),
+                ("$sortPath", file.SortPath),
+                ("$sizeBytes", (object)file.SizeBytes),
+                ("$lastModifiedUtc", (object)file.LastModifiedUtc.ToString("O")));
 
             await ExecuteNonQueryAsync(
                 connection,
@@ -119,23 +220,11 @@ public sealed class PicSelectStore
                 ("$projectId", (object)projectId),
                 ("$iterationId", (object)iterationId),
                 ("$photoId", (object)photoId),
-                ("$createdAtUtc", (object)importedAtUtc.ToString("O")));
+                ("$createdAtUtc", (object)createdAtUtc.ToString("O")));
         }
 
-        await ExecuteNonQueryAsync(
-            connection,
-            transaction,
-            """
-            UPDATE Projects
-            SET ImportStatus = $importStatus
-            WHERE Id = $projectId;
-            """,
-            cancellationToken,
-            ("$importStatus", (object)ProjectImportStatus.Completed.ToString()),
-            ("$projectId", (object)projectId));
-
         await transaction.CommitAsync(cancellationToken);
-        return new ImportedProject(projectId, normalizedFolderPath, files.Count, AlreadyExisted: false);
+        return batch.Count;
     }
 
     public async Task<IReadOnlyList<ProjectSummary>> GetProjectsAsync(CancellationToken cancellationToken = default)
@@ -601,14 +690,46 @@ public sealed class PicSelectStore
         _ = await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static List<FileInfo> EnumerateSupportedFiles(string folderPath)
+    private static IEnumerable<DiscoveredPhoto> EnumerateSupportedFiles(string folderPath)
     {
-        return new DirectoryInfo(folderPath)
-            .EnumerateFiles("*", SearchOption.TopDirectoryOnly)
-            .Where(file => SupportedExtensions.Contains(file.Extension))
-            .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(file => file.Name, StringComparer.Ordinal)
+        return EnumerateSupportedFiles(folderPath, folderPath);
+    }
+
+    private static IEnumerable<DiscoveredPhoto> EnumerateSupportedFiles(string rootFolderPath, string currentFolderPath)
+    {
+        var currentDirectory = new DirectoryInfo(currentFolderPath);
+        var entries = currentDirectory
+            .EnumerateFileSystemInfos()
+            .OrderBy(GetEntrySortKey, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(GetEntrySortKey, StringComparer.Ordinal)
             .ToList();
+
+        foreach (var entry in entries)
+        {
+            if (entry is DirectoryInfo directory)
+            {
+                foreach (var photo in EnumerateSupportedFiles(rootFolderPath, directory.FullName))
+                {
+                    yield return photo;
+                }
+
+                continue;
+            }
+
+            if (entry is not FileInfo file || !SupportedExtensions.Contains(file.Extension))
+            {
+                continue;
+            }
+
+            var relativePath = Path.GetRelativePath(rootFolderPath, file.FullName);
+            yield return new DiscoveredPhoto(
+                file.FullName,
+                relativePath,
+                file.Name,
+                relativePath.ToUpperInvariant(),
+                file.Length,
+                file.LastWriteTimeUtc);
+        }
     }
 
     private static async Task<ProjectImportStatus> GetProjectImportStatusAsync(
@@ -669,6 +790,46 @@ public sealed class PicSelectStore
             reader.GetInt32(6));
     }
 
+    private static async Task<ProjectSummary?> TryGetProjectSummaryByIdAsync(
+        SqliteConnection connection,
+        long projectId,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                p.Id,
+                p.FolderPath,
+                p.DisplayName,
+                p.ImportedAtUtc,
+                p.ImportStatus,
+                COUNT(DISTINCT ph.Id) AS PhotoCount,
+                COALESCE(MAX(i.Number), 0) AS IterationCount
+            FROM Projects p
+            LEFT JOIN Photos ph ON ph.ProjectId = p.Id
+            LEFT JOIN Iterations i ON i.ProjectId = p.Id
+            WHERE p.Id = $projectId
+            GROUP BY p.Id, p.FolderPath, p.DisplayName, p.ImportedAtUtc, p.ImportStatus;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new ProjectSummary(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            DateTimeOffset.Parse(reader.GetString(3)),
+            ParseProjectImportStatus(reader.GetString(4)),
+            reader.GetInt32(5),
+            reader.GetInt32(6));
+    }
+
     private async Task<List<IterationPhoto>> GetIterationPhotosByIterationIdAsync(
         SqliteConnection connection,
         long iterationId,
@@ -700,6 +861,7 @@ public sealed class PicSelectStore
             SELECT
                 ph.Id,
                 ph.FilePath,
+                ph.RelativePath,
                 ph.FileName,
                 ph.SizeBytes,
                 ph.LastModifiedUtc,
@@ -708,7 +870,7 @@ public sealed class PicSelectStore
             INNER JOIN Photos ph ON ph.Id = lm.PhotoId
             LEFT JOIN LatestDecision ld ON ld.PhotoId = ph.Id
             WHERE lm.EventType = 'include'
-            ORDER BY ph.SortName, ph.FileName, ph.Id;
+            ORDER BY ph.SortPath, ph.RelativePath, ph.Id;
             """;
         command.Parameters.AddWithValue("$iterationId", iterationId);
 
@@ -720,11 +882,12 @@ public sealed class PicSelectStore
                 reader.GetInt64(0),
                 reader.GetString(1),
                 reader.GetString(2),
-                reader.GetInt64(3),
-                DateTimeOffset.Parse(reader.GetString(4)),
-                reader.IsDBNull(5) || string.Equals(reader.GetString(5), "undecided", StringComparison.OrdinalIgnoreCase)
+                reader.GetString(3),
+                reader.GetInt64(4),
+                DateTimeOffset.Parse(reader.GetString(5)),
+                reader.IsDBNull(6) || string.Equals(reader.GetString(6), "undecided", StringComparison.OrdinalIgnoreCase)
                     ? null
-                    : reader.GetString(5)));
+                    : reader.GetString(6)));
         }
 
         return photos;
@@ -826,8 +989,10 @@ public sealed class PicSelectStore
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ProjectId INTEGER NOT NULL,
                 FilePath TEXT NOT NULL,
+                RelativePath TEXT NOT NULL DEFAULT '',
                 FileName TEXT NOT NULL,
                 SortName TEXT NOT NULL,
+                SortPath TEXT NOT NULL DEFAULT '',
                 SizeBytes INTEGER NOT NULL,
                 LastModifiedUtc TEXT NOT NULL,
                 UNIQUE(ProjectId, FilePath),
@@ -880,6 +1045,9 @@ public sealed class PicSelectStore
 
         _ = command.ExecuteNonQuery();
         EnsureColumnExists(connection, "Projects", "ImportStatus", "TEXT NOT NULL DEFAULT 'Completed'");
+        EnsureColumnExists(connection, "Photos", "RelativePath", "TEXT NOT NULL DEFAULT ''");
+        EnsureColumnExists(connection, "Photos", "SortPath", "TEXT NOT NULL DEFAULT ''");
+        BackfillPhotoPathColumns(connection);
     }
 
     private static ProjectImportStatus ParseProjectImportStatus(string statusText)
@@ -914,4 +1082,54 @@ public sealed class PicSelectStore
         alterCommand.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
         _ = alterCommand.ExecuteNonQuery();
     }
+
+    private static void BackfillPhotoPathColumns(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Photos
+            SET
+                RelativePath = CASE
+                    WHEN RelativePath = '' THEN FileName
+                    ELSE RelativePath
+                END,
+                SortPath = CASE
+                    WHEN SortPath = '' THEN SortName
+                    ELSE SortPath
+                END
+            WHERE RelativePath = '' OR SortPath = '';
+            """;
+
+        _ = command.ExecuteNonQuery();
+    }
+
+    private static async Task UpdateProjectStatusAsync(
+        SqliteConnection connection,
+        long projectId,
+        ProjectImportStatus importStatus,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Projects
+            SET ImportStatus = $importStatus
+            WHERE Id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$importStatus", importStatus.ToString());
+        command.Parameters.AddWithValue("$projectId", projectId);
+        _ = await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static string GetEntrySortKey(FileSystemInfo entry) =>
+        entry is DirectoryInfo ? $"{entry.Name}{Path.DirectorySeparatorChar}" : entry.Name;
+
+    private sealed record DiscoveredPhoto(
+        string AbsolutePath,
+        string RelativePath,
+        string FileName,
+        string SortPath,
+        long SizeBytes,
+        DateTimeOffset LastModifiedUtc);
 }

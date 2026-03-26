@@ -5,7 +5,7 @@ namespace PicSelect.Core.Tests;
 public sealed class ProjectStoreImportTests
 {
     [Fact]
-    public async Task ImportProjectFromFolderAsync_CreatesSnapshotAndSeedsIterationOne()
+    public async Task ImportProjectFromFolderAsync_RecursivelyCreatesSnapshotAndSeedsIterationOne()
     {
         using var workspace = new TestWorkspace();
         var sourceFolder = workspace.CreateDirectory("shoot");
@@ -13,12 +13,13 @@ public sealed class ProjectStoreImportTests
         workspace.WriteFile(Path.Combine(sourceFolder, "a.jpg"));
         workspace.WriteFile(Path.Combine(sourceFolder, "notes.txt"));
         workspace.WriteFile(Path.Combine(sourceFolder, "nested", "c.jpg"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "nested", "deep", "d.webp"));
 
         var store = new PicSelectStore(workspace.DatabasePath);
 
         var importedProject = await store.ImportProjectFromFolderAsync(sourceFolder);
 
-        Assert.Equal(2, importedProject.ImportedPhotoCount);
+        Assert.Equal(4, importedProject.ImportedPhotoCount);
 
         var project = await store.GetProjectOverviewAsync(importedProject.ProjectId);
         Assert.NotNull(project);
@@ -26,11 +27,19 @@ public sealed class ProjectStoreImportTests
 
         var iteration = Assert.Single(project.Iterations);
         Assert.Equal(1, iteration.Number);
-        Assert.Equal(2, iteration.TotalPhotoCount);
+        Assert.Equal(4, iteration.TotalPhotoCount);
         Assert.Equal(0, iteration.ReviewedPhotoCount);
 
         var photos = await store.GetIterationPhotosAsync(importedProject.ProjectId, 1);
-        Assert.Equal(new[] { "a.jpg", "b.png" }, photos.Select(photo => photo.FileName));
+        Assert.Equal(
+            new[]
+            {
+                "a.jpg",
+                "b.png",
+                Path.Combine("nested", "c.jpg"),
+                Path.Combine("nested", "deep", "d.webp"),
+            },
+            photos.Select(photo => photo.RelativePath));
 
         Assert.True(File.Exists(Path.Combine(sourceFolder, "a.jpg")));
         Assert.True(File.Exists(Path.Combine(sourceFolder, "b.png")));

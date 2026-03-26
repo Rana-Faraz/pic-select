@@ -15,6 +15,12 @@ public sealed record CreatedProject(long ProjectId, string FolderPath, ProjectIm
 
 public sealed record ImportedProject(long ProjectId, string FolderPath, int ImportedPhotoCount, bool AlreadyExisted);
 
+public sealed record ProjectImportProgress(
+    long ProjectId,
+    ProjectImportStatus ImportStatus,
+    int ImportedPhotoCount,
+    TimeSpan Elapsed);
+
 public sealed record ProjectSummary(
     long ProjectId,
     string FolderPath,
@@ -49,6 +55,7 @@ public sealed record IterationSummary(
 public sealed record IterationPhoto(
     long PhotoId,
     string FilePath,
+    string RelativePath,
     string FileName,
     long SizeBytes,
     DateTimeOffset LastModifiedUtc,
