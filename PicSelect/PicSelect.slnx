@@ -1,4 +1,6 @@
 <Solution>
+    <Project Path="../PicSelect.Core.Tests/PicSelect.Core.Tests.csproj" />
+    <Project Path="../PicSelect.Core/PicSelect.Core.csproj" />
     <Project Path="PicSelect.csproj">
         <Deploy />
     </Project>
