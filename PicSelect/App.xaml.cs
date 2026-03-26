@@ -18,17 +18,21 @@ namespace PicSelect
         public App()
         {
             this.InitializeComponent();
-            Store = new PicSelectStore(Path.Combine(
+            var appDataPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PicSelect",
-                "picselect.db"));
+                "PicSelect");
+
+            Store = new PicSelectStore(Path.Combine(appDataPath, "picselect.db"));
             Store.MarkIncompleteImportsInterrupted();
-            ImportCoordinator = new ProjectImportCoordinator(Store);
+            ThumbnailCache = new ThumbnailCacheService(Store, Path.Combine(appDataPath, "thumbnail-cache"));
+            ImportCoordinator = new ProjectImportCoordinator(Store, ThumbnailCache);
         }
 
         public Window MainWindow => window ?? throw new InvalidOperationException("Main window has not been created yet.");
 
         public PicSelectStore Store { get; }
+
+        public ThumbnailCacheService ThumbnailCache { get; }
 
         public ProjectImportCoordinator ImportCoordinator { get; }
 

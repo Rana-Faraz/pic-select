@@ -7,10 +7,12 @@ public sealed class ProjectImportCoordinator
     private readonly object gate = new();
     private readonly Dictionary<long, ActiveImport> activeImports = new();
     private readonly PicSelectStore store;
+    private readonly ThumbnailCacheService thumbnailCache;
 
-    public ProjectImportCoordinator(PicSelectStore store)
+    public ProjectImportCoordinator(PicSelectStore store, ThumbnailCacheService thumbnailCache)
     {
         this.store = store;
+        this.thumbnailCache = thumbnailCache;
     }
 
     public bool HasActiveImports
@@ -78,7 +80,8 @@ public sealed class ProjectImportCoordinator
     {
         try
         {
-            await store.RunProjectImportAsync(projectId, cancellationToken: cancellationTokenSource.Token);
+            var importedProject = await store.RunProjectImportAsync(projectId, cancellationToken: cancellationTokenSource.Token);
+            thumbnailCache.StartThumbnailGeneration(importedProject.ProjectId);
         }
         catch (OperationCanceledException)
         {
