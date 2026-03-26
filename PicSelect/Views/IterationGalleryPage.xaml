@@ -45,10 +45,27 @@
                                     Height="160"
                                     Background="#101214"
                                     CornerRadius="8">
-                                    <Image
-                                        Height="160"
-                                        Source="{Binding PreviewUri}"
-                                        Stretch="UniformToFill" />
+                                    <Grid>
+                                        <StackPanel
+                                            HorizontalAlignment="Center"
+                                            Spacing="6"
+                                            VerticalAlignment="Center"
+                                            Visibility="{Binding PlaceholderVisibility}">
+                                            <TextBlock
+                                                HorizontalAlignment="Center"
+                                                Foreground="White"
+                                                Text="Thumbnail pending" />
+                                            <ProgressRing
+                                                Height="22"
+                                                IsActive="True"
+                                                Width="22" />
+                                        </StackPanel>
+                                        <Image
+                                            Height="160"
+                                            Source="{Binding ThumbnailUri}"
+                                            Stretch="UniformToFill"
+                                            Visibility="{Binding ThumbnailVisibility}" />
+                                    </Grid>
                                 </Border>
                                 <TextBlock
                                     Margin="0,10,0,0"
