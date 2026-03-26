@@ -5,7 +5,7 @@ namespace PicSelect.Services;
 public sealed class ProjectImportCoordinator
 {
     private readonly object gate = new();
-    private readonly Dictionary<long, Task> activeImports = new();
+    private readonly Dictionary<long, ActiveImport> activeImports = new();
     private readonly PicSelectStore store;
 
     public ProjectImportCoordinator(PicSelectStore store)
@@ -34,6 +34,9 @@ public sealed class ProjectImportCoordinator
 
     public void StartImport(long projectId)
     {
+        CancellationTokenSource cancellationTokenSource;
+        Task importTask;
+
         lock (gate)
         {
             if (activeImports.ContainsKey(projectId))
@@ -41,15 +44,44 @@ public sealed class ProjectImportCoordinator
                 return;
             }
 
-            activeImports[projectId] = RunImportAsync(projectId);
+            cancellationTokenSource = new CancellationTokenSource();
+            importTask = RunImportAsync(projectId, cancellationTokenSource);
+            activeImports[projectId] = new ActiveImport(cancellationTokenSource, importTask);
         }
     }
 
-    private async Task RunImportAsync(long projectId)
+    public async Task CancelImportAsync(long projectId)
+    {
+        ActiveImport? activeImport;
+        lock (gate)
+        {
+            activeImports.TryGetValue(projectId, out activeImport);
+        }
+
+        if (activeImport is null)
+        {
+            return;
+        }
+
+        activeImport.CancellationTokenSource.Cancel();
+
+        try
+        {
+            await activeImport.ImportTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task RunImportAsync(long projectId, CancellationTokenSource cancellationTokenSource)
     {
         try
         {
-            await store.RunProjectImportAsync(projectId);
+            await store.RunProjectImportAsync(projectId, cancellationToken: cancellationTokenSource.Token);
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception exception)
         {
@@ -57,10 +89,13 @@ public sealed class ProjectImportCoordinator
         }
         finally
         {
+            cancellationTokenSource.Dispose();
             lock (gate)
             {
                 activeImports.Remove(projectId);
             }
         }
     }
+
+    private sealed record ActiveImport(CancellationTokenSource CancellationTokenSource, Task ImportTask);
 }

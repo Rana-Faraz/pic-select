@@ -50,6 +50,16 @@ namespace PicSelect.Views
                     return;
                 }
 
+                if (createdProject.AlreadyExisted &&
+                    (createdProject.ImportStatus == ProjectImportStatus.Canceled ||
+                     createdProject.ImportStatus == ProjectImportStatus.Interrupted ||
+                     createdProject.ImportStatus == ProjectImportStatus.Failed))
+                {
+                    StatusTextBlock.Text = $"Project '{createdProject.FolderPath}' is incomplete. Open it and choose Restart Import.";
+                    OpenProject(createdProject.ProjectId);
+                    return;
+                }
+
                 importCoordinator.StartImport(createdProject.ProjectId);
                 refreshTimer.Start();
 

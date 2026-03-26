@@ -22,6 +22,7 @@ namespace PicSelect
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "PicSelect",
                 "picselect.db"));
+            Store.MarkIncompleteImportsInterrupted();
             ImportCoordinator = new ProjectImportCoordinator(Store);
         }
 

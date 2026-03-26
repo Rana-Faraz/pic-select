@@ -57,6 +57,21 @@
                         <TextBlock
                             x:Name="ImportElapsedTextBlock"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <StackPanel
+                            Orientation="Horizontal"
+                            Spacing="12">
+                            <Button
+                                x:Name="CancelImportButton"
+                                Click="OnCancelImportClicked"
+                                Content="Cancel Import"
+                                Visibility="Collapsed" />
+                            <Button
+                                x:Name="RestartImportButton"
+                                Click="OnRestartImportClicked"
+                                Content="Restart Import"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Visibility="Collapsed" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 

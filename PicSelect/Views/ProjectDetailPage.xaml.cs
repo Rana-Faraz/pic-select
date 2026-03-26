@@ -59,6 +59,8 @@ public sealed partial class ProjectDetailPage : Page
         ImportHintTextBlock.Text = string.Empty;
         ImportProgressTextBlock.Text = string.Empty;
         ImportElapsedTextBlock.Text = string.Empty;
+        CancelImportButton.Visibility = Visibility.Collapsed;
+        RestartImportButton.Visibility = Visibility.Collapsed;
         ImportStateBorder.Visibility = Visibility.Collapsed;
         IterationsListView.ItemsSource = null;
         IterationsListView.Visibility = Visibility.Collapsed;
@@ -116,6 +118,46 @@ public sealed partial class ProjectDetailPage : Page
         await LoadProjectAsync(currentProjectId);
     }
 
+    private async void OnCancelImportClicked(object sender, RoutedEventArgs e)
+    {
+        if (currentProjectId == 0)
+        {
+            return;
+        }
+
+        CancelImportButton.IsEnabled = false;
+        try
+        {
+            await importCoordinator.CancelImportAsync(currentProjectId);
+            await LoadProjectAsync(currentProjectId);
+        }
+        finally
+        {
+            CancelImportButton.IsEnabled = true;
+        }
+    }
+
+    private async void OnRestartImportClicked(object sender, RoutedEventArgs e)
+    {
+        if (currentProjectId == 0)
+        {
+            return;
+        }
+
+        RestartImportButton.IsEnabled = false;
+        try
+        {
+            await store.ResetProjectImportAsync(currentProjectId);
+            await LoadProjectAsync(currentProjectId);
+            importCoordinator.StartImport(currentProjectId);
+            refreshTimer.Start();
+        }
+        finally
+        {
+            RestartImportButton.IsEnabled = true;
+        }
+    }
+
     private static bool TryGetProjectId(object parameter, out long projectId)
     {
         switch (parameter)
@@ -159,6 +201,12 @@ public sealed partial class ProjectDetailPage : Page
             ImportProgressTextBlock.Text = GetImportProgressText(project);
             ImportElapsedTextBlock.Text = $"Elapsed {project.ImportElapsedText}";
             ImportStateBorder.Visibility = project.IsReviewAvailable ? Visibility.Collapsed : Visibility.Visible;
+            CancelImportButton.Visibility = importCoordinator.IsImportActive(projectId)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            RestartImportButton.Visibility = CanRestartImport(project.ImportStatus)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             IterationsListView.IsItemClickEnabled = project.IsReviewAvailable;
             IterationsListView.Visibility = project.Iterations.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             IterationsListView.ItemsSource = project.Iterations;
@@ -181,6 +229,9 @@ public sealed partial class ProjectDetailPage : Page
             ? $"{importedPhotoCount} photos imported and ready for review."
             : $"{importedPhotoCount} photos imported so far.";
     }
+
+    private static bool CanRestartImport(ProjectImportStatus importStatus) =>
+        importStatus is ProjectImportStatus.Canceled or ProjectImportStatus.Interrupted or ProjectImportStatus.Failed;
 
     private static string GetImportHint(ProjectImportStatus importStatus) =>
         importStatus switch

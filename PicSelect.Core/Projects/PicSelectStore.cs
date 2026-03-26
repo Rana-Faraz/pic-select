@@ -111,43 +111,135 @@ public sealed class PicSelectStore
         var batch = new List<DiscoveredPhoto>(ImportBatchSize);
         var status = ProjectImportStatus.Scanning;
 
-        foreach (var file in EnumerateSupportedFiles(project.FolderPath))
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            batch.Add(file);
-
-            if (batch.Count < ImportBatchSize)
+            foreach (var file in EnumerateSupportedFiles(project.FolderPath))
             {
-                continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                batch.Add(file);
+
+                if (batch.Count < ImportBatchSize)
+                {
+                    continue;
+                }
+
+                if (status != ProjectImportStatus.Importing)
+                {
+                    status = ProjectImportStatus.Importing;
+                    await UpdateProjectStatusAsync(connection, projectId, status, cancellationToken);
+                }
+
+                importedPhotoCount += await PersistImportBatchAsync(connection, projectId, iterationId, batch, startedAtUtc, cancellationToken);
+                batch.Clear();
+                progress?.Report(new ProjectImportProgress(projectId, status, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
             }
 
-            if (status != ProjectImportStatus.Importing)
+            if (batch.Count > 0)
             {
-                status = ProjectImportStatus.Importing;
-                await UpdateProjectStatusAsync(connection, projectId, status, cancellationToken);
+                if (status != ProjectImportStatus.Importing)
+                {
+                    status = ProjectImportStatus.Importing;
+                    await UpdateProjectStatusAsync(connection, projectId, status, cancellationToken);
+                }
+
+                importedPhotoCount += await PersistImportBatchAsync(connection, projectId, iterationId, batch, startedAtUtc, cancellationToken);
+                progress?.Report(new ProjectImportProgress(projectId, status, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
             }
 
-            importedPhotoCount += await PersistImportBatchAsync(connection, projectId, iterationId, batch, startedAtUtc, cancellationToken);
-            batch.Clear();
-            progress?.Report(new ProjectImportProgress(projectId, status, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+            await UpdateProjectStatusAsync(connection, projectId, ProjectImportStatus.Completed, cancellationToken);
+            progress?.Report(new ProjectImportProgress(projectId, ProjectImportStatus.Completed, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+
+            return new ImportedProject(projectId, project.FolderPath, importedPhotoCount, AlreadyExisted: false);
         }
-
-        if (batch.Count > 0)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            if (status != ProjectImportStatus.Importing)
-            {
-                status = ProjectImportStatus.Importing;
-                await UpdateProjectStatusAsync(connection, projectId, status, cancellationToken);
-            }
-
-            importedPhotoCount += await PersistImportBatchAsync(connection, projectId, iterationId, batch, startedAtUtc, cancellationToken);
-            progress?.Report(new ProjectImportProgress(projectId, status, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+            await UpdateProjectStatusAsync(connection, projectId, ProjectImportStatus.Canceled, CancellationToken.None);
+            progress?.Report(new ProjectImportProgress(projectId, ProjectImportStatus.Canceled, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+            throw;
         }
+        catch
+        {
+            await UpdateProjectStatusAsync(connection, projectId, ProjectImportStatus.Failed, CancellationToken.None);
+            progress?.Report(new ProjectImportProgress(projectId, ProjectImportStatus.Failed, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+            throw;
+        }
+    }
 
-        await UpdateProjectStatusAsync(connection, projectId, ProjectImportStatus.Completed, cancellationToken);
-        progress?.Report(new ProjectImportProgress(projectId, ProjectImportStatus.Completed, importedPhotoCount, DateTimeOffset.UtcNow - startedAtUtc));
+    public async Task SetProjectImportStatusAsync(
+        long projectId,
+        ProjectImportStatus importStatus,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        await UpdateProjectStatusAsync(connection, projectId, importStatus, cancellationToken);
+    }
 
-        return new ImportedProject(projectId, project.FolderPath, importedPhotoCount, AlreadyExisted: false);
+    public void MarkIncompleteImportsInterrupted()
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Projects
+            SET ImportStatus = $interrupted
+            WHERE ImportStatus IN ($scanning, $importing);
+            """;
+        command.Parameters.AddWithValue("$interrupted", ProjectImportStatus.Interrupted.ToString());
+        command.Parameters.AddWithValue("$scanning", ProjectImportStatus.Scanning.ToString());
+        command.Parameters.AddWithValue("$importing", ProjectImportStatus.Importing.ToString());
+        _ = command.ExecuteNonQuery();
+    }
+
+    public async Task ResetProjectImportAsync(long projectId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            DELETE FROM ReviewState
+            WHERE ProjectId = $projectId;
+            """,
+            cancellationToken,
+            ("$projectId", (object)projectId));
+
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            DELETE FROM Iterations
+            WHERE ProjectId = $projectId;
+            """,
+            cancellationToken,
+            ("$projectId", (object)projectId));
+
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            DELETE FROM Photos
+            WHERE ProjectId = $projectId;
+            """,
+            cancellationToken,
+            ("$projectId", (object)projectId));
+
+        await ExecuteNonQueryAsync(
+            connection,
+            transaction,
+            """
+            UPDATE Projects
+            SET ImportStatus = $importStatus,
+                ImportedAtUtc = $importedAtUtc
+            WHERE Id = $projectId;
+            """,
+            cancellationToken,
+            ("$importStatus", (object)ProjectImportStatus.Pending.ToString()),
+            ("$importedAtUtc", (object)DateTimeOffset.UtcNow.ToString("O")),
+            ("$projectId", (object)projectId));
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private static async Task<long> EnsureIterationOneAsync(
