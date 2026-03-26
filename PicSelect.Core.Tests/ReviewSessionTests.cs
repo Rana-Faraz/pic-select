@@ -78,6 +78,63 @@ public sealed class ReviewSessionTests
         Assert.Equal(1, updatedSession.ReviewedPhotoCount);
     }
 
+    [Fact]
+    public async Task GetReviewSessionAsync_ReturnsNullUntilBackgroundImportCompletes()
+    {
+        using var workspace = new TestWorkspace();
+        var sourceFolder = workspace.CreateDirectory("background-review");
+        workspace.WriteFile(Path.Combine(sourceFolder, "a.jpg"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "nested", "b.jpg"));
+
+        var store = new PicSelectStore(workspace.DatabasePath);
+        var createdProject = await store.CreateProjectAsync(sourceFolder);
+        using var importGate = new BlockingImportProgress();
+
+        var importTask = Task.Run(async () => await store.RunProjectImportAsync(createdProject.ProjectId, importGate));
+        await importGate.WaitForImportingAsync();
+
+        var inFlightSession = await store.GetReviewSessionAsync(createdProject.ProjectId, 1);
+        Assert.Null(inFlightSession);
+
+        importGate.Release();
+        await importTask;
+
+        var completedSession = await store.GetReviewSessionAsync(createdProject.ProjectId, 1);
+        Assert.NotNull(completedSession);
+        Assert.Equal(2, completedSession.Photos.Count);
+    }
+
+    [Fact]
+    public async Task RunProjectImportAsync_PreservesIterationOneReviewSemanticsAfterRecursiveImport()
+    {
+        using var workspace = new TestWorkspace();
+        var sourceFolder = workspace.CreateDirectory("scalable-review");
+        workspace.WriteFile(Path.Combine(sourceFolder, "c.jpg"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "nested", "a.jpg"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "nested", "b.jpg"));
+
+        var store = new PicSelectStore(workspace.DatabasePath);
+        var createdProject = await store.CreateProjectAsync(sourceFolder);
+
+        await store.RunProjectImportAsync(createdProject.ProjectId);
+
+        var overview = await store.GetProjectOverviewAsync(createdProject.ProjectId);
+        var session = await store.GetReviewSessionAsync(createdProject.ProjectId, 1);
+
+        Assert.NotNull(overview);
+        Assert.Equal(ProjectImportStatus.Completed, overview.ImportStatus);
+        Assert.Equal(3, overview.Iterations.Single().TotalPhotoCount);
+
+        Assert.NotNull(session);
+        Assert.Equal(new[]
+        {
+            "c.jpg",
+            Path.Combine("nested", "a.jpg"),
+            Path.Combine("nested", "b.jpg"),
+        }, session.Photos.Select(photo => photo.RelativePath));
+        Assert.Equal(0, session.ReviewedPhotoCount);
+    }
+
     private sealed class TestWorkspace : IDisposable
     {
         private readonly string rootPath = Path.Combine(Path.GetTempPath(), "PicSelect.Tests", Guid.NewGuid().ToString("N"));
@@ -108,6 +165,40 @@ public sealed class ReviewSessionTests
             {
                 Directory.Delete(rootPath, recursive: true);
             }
+        }
+    }
+
+    private sealed class BlockingImportProgress : IProgress<ProjectImportProgress>, IDisposable
+    {
+        private readonly ManualResetEventSlim enteredImporting = new(false);
+        private readonly ManualResetEventSlim releaseImport = new(false);
+
+        public void Report(ProjectImportProgress value)
+        {
+            if (value.ImportStatus != ProjectImportStatus.Importing)
+            {
+                return;
+            }
+
+            enteredImporting.Set();
+            releaseImport.Wait();
+        }
+
+        public Task WaitForImportingAsync()
+        {
+            enteredImporting.Wait();
+            return Task.CompletedTask;
+        }
+
+        public void Release()
+        {
+            releaseImport.Set();
+        }
+
+        public void Dispose()
+        {
+            enteredImporting.Dispose();
+            releaseImport.Dispose();
         }
     }
 }
