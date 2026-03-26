@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml.Navigation;
 using PicSelect.Core.Projects;
+using PicSelect.Services;
 
 namespace PicSelect
 {
@@ -21,11 +22,14 @@ namespace PicSelect
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "PicSelect",
                 "picselect.db"));
+            ImportCoordinator = new ProjectImportCoordinator(Store);
         }
 
         public Window MainWindow => window ?? throw new InvalidOperationException("Main window has not been created yet.");
 
         public PicSelectStore Store { get; }
+
+        public ProjectImportCoordinator ImportCoordinator { get; }
 
         /// <summary>
         /// Invoked when the application is launched normally by the end user.  Other entry points

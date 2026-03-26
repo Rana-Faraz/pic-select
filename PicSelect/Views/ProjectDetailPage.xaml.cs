@@ -1,19 +1,31 @@
 using Microsoft.UI.Xaml.Navigation;
 using PicSelect.Core.Projects;
 using PicSelect.Navigation;
+using PicSelect.Services;
+using Microsoft.UI.Dispatching;
 
 namespace PicSelect.Views;
 
 public sealed partial class ProjectDetailPage : Page
 {
+    private readonly ProjectImportCoordinator importCoordinator;
+    private readonly DispatcherQueueTimer refreshTimer;
     private readonly PicSelectStore store;
     private long currentProjectId;
     private ProjectImportStatus currentImportStatus;
+    private bool isRefreshingProject;
 
     public ProjectDetailPage()
     {
         InitializeComponent();
-        store = ((App)Application.Current).Store;
+        var app = (App)Application.Current;
+        store = app.Store;
+        importCoordinator = app.ImportCoordinator;
+        refreshTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+        refreshTimer.Interval = TimeSpan.FromSeconds(1);
+        refreshTimer.Tick += OnRefreshTick;
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
     }
 
     protected override async void OnNavigatedTo(NavigationEventArgs e)
@@ -26,24 +38,7 @@ public sealed partial class ProjectDetailPage : Page
             return;
         }
 
-        var project = await store.GetProjectOverviewAsync(projectId);
-        if (project is null)
-        {
-            ShowMissingProject();
-            return;
-        }
-
-        currentProjectId = project.ProjectId;
-        currentImportStatus = project.ImportStatus;
-        MissingProjectBorder.Visibility = Visibility.Collapsed;
-        ProjectNameTextBlock.Text = project.DisplayName;
-        FolderPathTextBlock.Text = project.FolderPath;
-        ImportStatusTextBlock.Text = $"Status: {project.ImportStatus}";
-        ImportHintTextBlock.Text = GetImportHint(project.ImportStatus);
-        ImportStateBorder.Visibility = project.IsReviewAvailable ? Visibility.Collapsed : Visibility.Visible;
-        IterationsListView.IsItemClickEnabled = project.IsReviewAvailable;
-        IterationsListView.Visibility = project.Iterations.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        IterationsListView.ItemsSource = project.Iterations;
+        await LoadProjectAsync(projectId);
     }
 
     private void OnBackClicked(object sender, RoutedEventArgs e)
@@ -62,6 +57,8 @@ public sealed partial class ProjectDetailPage : Page
         FolderPathTextBlock.Text = string.Empty;
         ImportStatusTextBlock.Text = string.Empty;
         ImportHintTextBlock.Text = string.Empty;
+        ImportProgressTextBlock.Text = string.Empty;
+        ImportElapsedTextBlock.Text = string.Empty;
         ImportStateBorder.Visibility = Visibility.Collapsed;
         IterationsListView.ItemsSource = null;
         IterationsListView.Visibility = Visibility.Collapsed;
@@ -92,6 +89,33 @@ public sealed partial class ProjectDetailPage : Page
         Frame.Navigate(typeof(ReviewPage), new ReviewNavigationArgs(currentProjectId, iteration.Number));
     }
 
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        refreshTimer.Start();
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        refreshTimer.Stop();
+    }
+
+    private async void OnRefreshTick(DispatcherQueueTimer sender, object args)
+    {
+        if (currentProjectId == 0)
+        {
+            refreshTimer.Stop();
+            return;
+        }
+
+        if (currentImportStatus == ProjectImportStatus.Completed && !importCoordinator.IsImportActive(currentProjectId))
+        {
+            refreshTimer.Stop();
+            return;
+        }
+
+        await LoadProjectAsync(currentProjectId);
+    }
+
     private static bool TryGetProjectId(object parameter, out long projectId)
     {
         switch (parameter)
@@ -106,6 +130,56 @@ public sealed partial class ProjectDetailPage : Page
                 projectId = 0;
                 return false;
         }
+    }
+
+    private async Task LoadProjectAsync(long projectId)
+    {
+        if (isRefreshingProject)
+        {
+            return;
+        }
+
+        isRefreshingProject = true;
+        try
+        {
+            var project = await store.GetProjectOverviewAsync(projectId);
+            if (project is null)
+            {
+                ShowMissingProject();
+                return;
+            }
+
+            currentProjectId = project.ProjectId;
+            currentImportStatus = project.ImportStatus;
+            MissingProjectBorder.Visibility = Visibility.Collapsed;
+            ProjectNameTextBlock.Text = project.DisplayName;
+            FolderPathTextBlock.Text = project.FolderPath;
+            ImportStatusTextBlock.Text = $"Status: {project.ImportStatus}";
+            ImportHintTextBlock.Text = GetImportHint(project.ImportStatus);
+            ImportProgressTextBlock.Text = GetImportProgressText(project);
+            ImportElapsedTextBlock.Text = $"Elapsed {project.ImportElapsedText}";
+            ImportStateBorder.Visibility = project.IsReviewAvailable ? Visibility.Collapsed : Visibility.Visible;
+            IterationsListView.IsItemClickEnabled = project.IsReviewAvailable;
+            IterationsListView.Visibility = project.Iterations.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            IterationsListView.ItemsSource = project.Iterations;
+
+            if (!project.IsReviewAvailable || importCoordinator.IsImportActive(projectId))
+            {
+                refreshTimer.Start();
+            }
+        }
+        finally
+        {
+            isRefreshingProject = false;
+        }
+    }
+
+    private static string GetImportProgressText(ProjectOverview project)
+    {
+        var importedPhotoCount = project.Iterations.FirstOrDefault()?.TotalPhotoCount ?? 0;
+        return project.ImportStatus == ProjectImportStatus.Completed
+            ? $"{importedPhotoCount} photos imported and ready for review."
+            : $"{importedPhotoCount} photos imported so far.";
     }
 
     private static string GetImportHint(ProjectImportStatus importStatus) =>

@@ -31,6 +31,10 @@ public sealed record ProjectSummary(
     int IterationCount)
 {
     public bool IsReviewAvailable => ImportStatus == ProjectImportStatus.Completed;
+    public string ImportElapsedText => ProjectTimeFormatting.FormatElapsed(DateTimeOffset.UtcNow - ImportedAtUtc);
+    public string ImportCountText => ImportStatus == ProjectImportStatus.Completed
+        ? $"{PhotoCount} photos imported"
+        : $"{PhotoCount} photos imported so far";
 }
 
 public sealed record ProjectOverview(
@@ -42,6 +46,7 @@ public sealed record ProjectOverview(
     IReadOnlyList<IterationSummary> Iterations)
 {
     public bool IsReviewAvailable => ImportStatus == ProjectImportStatus.Completed;
+    public string ImportElapsedText => ProjectTimeFormatting.FormatElapsed(DateTimeOffset.UtcNow - ImportedAtUtc);
 }
 
 public sealed record IterationSummary(
@@ -70,4 +75,19 @@ public sealed record ReviewSession(
     IReadOnlyList<IterationPhoto> Photos)
 {
     public IterationPhoto CurrentPhoto => Photos[CurrentPhotoIndex];
+}
+
+internal static class ProjectTimeFormatting
+{
+    public static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed < TimeSpan.Zero)
+        {
+            elapsed = TimeSpan.Zero;
+        }
+
+        return elapsed.TotalHours >= 1
+            ? $"{(int)elapsed.TotalHours:00}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
+            : $"{elapsed.Minutes:00}:{elapsed.Seconds:00}";
+    }
 }

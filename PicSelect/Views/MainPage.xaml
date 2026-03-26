@@ -22,7 +22,7 @@
                     Text="PicSelect" />
                 <TextBlock
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Create a non-destructive project from a photo folder and track whether its snapshot is ready for review." />
+                    Text="Create a non-destructive project from a photo folder, scan subfolders recursively, and track import progress without blocking the app." />
             </StackPanel>
 
             <StackPanel
@@ -96,6 +96,14 @@
                                             Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}">
                                             <Run Text="Status: " />
                                             <Run Text="{Binding ImportStatus}" />
+                                        </TextBlock>
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Text="{Binding ImportCountText}" />
+                                        <TextBlock
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                                            <Run Text="Elapsed " />
+                                            <Run Text="{Binding ImportElapsedText}" />
                                         </TextBlock>
                                         <TextBlock
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"

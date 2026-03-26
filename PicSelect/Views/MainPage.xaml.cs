@@ -1,4 +1,6 @@
 using PicSelect.Core.Projects;
+using PicSelect.Services;
+using Microsoft.UI.Dispatching;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -6,13 +8,22 @@ namespace PicSelect.Views
 {
     public sealed partial class MainPage : Page
     {
+        private readonly ProjectImportCoordinator importCoordinator;
+        private readonly DispatcherQueueTimer refreshTimer;
         private readonly PicSelectStore store;
+        private bool isRefreshingProjects;
 
         public MainPage()
         {
             InitializeComponent();
-            store = ((App)Application.Current).Store;
+            var app = (App)Application.Current;
+            store = app.Store;
+            importCoordinator = app.ImportCoordinator;
+            refreshTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+            refreshTimer.Interval = TimeSpan.FromSeconds(1);
+            refreshTimer.Tick += OnRefreshTick;
             Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
         }
 
         private async void OnCreateProjectClicked(object sender, RoutedEventArgs e)
@@ -32,18 +43,21 @@ namespace PicSelect.Views
                 var createdProject = await store.CreateProjectAsync(folderPath);
                 await LoadProjectsAsync();
 
+                if (createdProject.ImportStatus == ProjectImportStatus.Completed)
+                {
+                    StatusTextBlock.Text = $"Project already exists for '{createdProject.FolderPath}'.";
+                    OpenProject(createdProject.ProjectId);
+                    return;
+                }
+
+                importCoordinator.StartImport(createdProject.ProjectId);
+                refreshTimer.Start();
+
                 StatusTextBlock.Text = createdProject.AlreadyExisted
-                    ? $"Project already exists for '{createdProject.FolderPath}'. Opening the saved snapshot."
-                    : $"Created project for '{createdProject.FolderPath}'. Importing the snapshot now.";
+                    ? $"Resuming the background import for '{createdProject.FolderPath}'."
+                    : $"Created project for '{createdProject.FolderPath}'. Importing in the background now.";
 
-                var importedProject = await store.ImportProjectFromFolderAsync(folderPath);
-                await LoadProjectsAsync();
-
-                StatusTextBlock.Text = importedProject.AlreadyExisted
-                    ? $"Project already exists for '{importedProject.FolderPath}'."
-                    : $"Imported {importedProject.ImportedPhotoCount} photos from '{importedProject.FolderPath}'.";
-
-                OpenProject(importedProject.ProjectId);
+                OpenProject(createdProject.ProjectId);
             }
             catch (Exception exception)
             {
@@ -59,7 +73,23 @@ namespace PicSelect.Views
 
         private async void OnLoaded(object sender, RoutedEventArgs e)
         {
-            Loaded -= OnLoaded;
+            await LoadProjectsAsync();
+            refreshTimer.Start();
+        }
+
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            refreshTimer.Stop();
+        }
+
+        private async void OnRefreshTick(DispatcherQueueTimer sender, object args)
+        {
+            if (!importCoordinator.HasActiveImports)
+            {
+                refreshTimer.Stop();
+                return;
+            }
+
             await LoadProjectsAsync();
         }
 
@@ -85,10 +115,23 @@ namespace PicSelect.Views
 
         private async Task LoadProjectsAsync()
         {
+            if (isRefreshingProjects)
+            {
+                return;
+            }
+
+            isRefreshingProjects = true;
+            try
+            {
             var projects = await store.GetProjectsAsync();
             ProjectsListView.ItemsSource = projects;
             ProjectsListView.Visibility = projects.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             EmptyStateBorder.Visibility = projects.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+            }
+            finally
+            {
+                isRefreshingProjects = false;
+            }
         }
 
         private void OpenProject(long projectId)

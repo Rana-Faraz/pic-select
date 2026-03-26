@@ -47,9 +47,17 @@
                     BorderThickness="1"
                     CornerRadius="12"
                     Visibility="Collapsed">
-                    <TextBlock
-                        x:Name="ImportHintTextBlock"
-                        TextWrapping="WrapWholeWords" />
+                    <StackPanel Spacing="8">
+                        <TextBlock
+                            x:Name="ImportHintTextBlock"
+                            TextWrapping="WrapWholeWords" />
+                        <TextBlock
+                            x:Name="ImportProgressTextBlock"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock
+                            x:Name="ImportElapsedTextBlock"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
                 </Border>
 
                 <Border

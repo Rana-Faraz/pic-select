@@ -86,6 +86,29 @@ public sealed class ProjectStoreImportTests
         Assert.Equal(0, iteration.ReviewedPhotoCount);
     }
 
+    [Fact]
+    public async Task ImportProjectFromFolderAsync_ReportsRealProgressStates()
+    {
+        using var workspace = new TestWorkspace();
+        var sourceFolder = workspace.CreateDirectory("progress");
+        workspace.WriteFile(Path.Combine(sourceFolder, "frame-02.png"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "nested", "frame-01.png"));
+
+        var store = new PicSelectStore(workspace.DatabasePath);
+        var updates = new List<ProjectImportProgress>();
+
+        var importedProject = await store.ImportProjectFromFolderAsync(
+            sourceFolder,
+            new CollectingProgress<ProjectImportProgress>(updates));
+
+        Assert.Equal(importedProject.ImportedPhotoCount, updates[^1].ImportedPhotoCount);
+        Assert.Contains(updates, update => update.ImportStatus == ProjectImportStatus.Scanning);
+        Assert.Contains(updates, update => update.ImportStatus == ProjectImportStatus.Importing);
+        Assert.Equal(ProjectImportStatus.Completed, updates[^1].ImportStatus);
+        Assert.True(updates.Select(update => update.ImportedPhotoCount).SequenceEqual(
+            updates.Select(update => update.ImportedPhotoCount).OrderBy(count => count)));
+    }
+
     private sealed class TestWorkspace : IDisposable
     {
         private readonly string rootPath = Path.Combine(Path.GetTempPath(), "PicSelect.Tests", Guid.NewGuid().ToString("N"));
@@ -116,6 +139,14 @@ public sealed class ProjectStoreImportTests
             {
                 Directory.Delete(rootPath, recursive: true);
             }
+        }
+    }
+
+    private sealed class CollectingProgress<T>(ICollection<T> values) : IProgress<T>
+    {
+        public void Report(T value)
+        {
+            values.Add(value);
         }
     }
 }
