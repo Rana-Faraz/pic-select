@@ -77,6 +77,22 @@ public sealed class ProjectImportRecoveryTests
         Assert.Equal(600, completedProject.Iterations.Single().TotalPhotoCount);
     }
 
+    [Fact]
+    public async Task DeleteProjectAsync_RemovesProjectFromCatalog()
+    {
+        using var workspace = new TestWorkspace();
+        var sourceFolder = workspace.CreateDirectory("delete");
+        workspace.WriteFiles(sourceFolder, 2);
+
+        var store = new PicSelectStore(workspace.DatabasePath);
+        var importedProject = await store.ImportProjectFromFolderAsync(sourceFolder);
+
+        await store.DeleteProjectAsync(importedProject.ProjectId);
+
+        Assert.Empty(await store.GetProjectsAsync());
+        Assert.Null(await store.GetProjectOverviewAsync(importedProject.ProjectId));
+    }
+
     private sealed class TestWorkspace : IDisposable
     {
         private readonly string rootPath = Path.Combine(Path.GetTempPath(), "PicSelect.Tests", Guid.NewGuid().ToString("N"));

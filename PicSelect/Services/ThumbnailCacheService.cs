@@ -46,6 +46,17 @@ public sealed class ThumbnailCacheService
         return File.Exists(thumbnailPath) ? new Uri(thumbnailPath) : null;
     }
 
+    public void DeleteProjectCache(long projectId)
+    {
+        var projectCachePath = GetProjectCachePath(projectId);
+        if (!Directory.Exists(projectCachePath))
+        {
+            return;
+        }
+
+        Directory.Delete(projectCachePath, recursive: true);
+    }
+
     private async Task RunThumbnailGenerationAsync(long projectId)
     {
         try

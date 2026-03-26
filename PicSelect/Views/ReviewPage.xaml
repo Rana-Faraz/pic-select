@@ -7,126 +7,235 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
     <Page.Content>
-        <Grid Padding="24" RowSpacing="16">
+        <Grid
+            Padding="8,8,8,12"
+            Background="#101214"
+            RowSpacing="8">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <CommandBar DefaultLabelPosition="Right">
-                <AppBarButton Click="OnBackClicked" Icon="Back" Label="Back" />
-                <AppBarButton Click="OnUndoClicked" Icon="Undo" Label="Undo" />
-                <AppBarButton Click="OnPromoteClicked" Icon="Add" Label="Promote" />
-                <AppBarButton Click="OnRemoveLaterClicked" Icon="Remove" Label="Remove Later" />
-            </CommandBar>
-
-            <Grid Grid.Row="1" ColumnSpacing="16">
+            <Grid ColumnSpacing="16">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Spacing="4">
+                <Button
+                    Click="OnBackClicked"
+                    HorizontalAlignment="Left"
+                    Padding="10,8"
+                    ToolTipService.ToolTip="Back"
+                    VerticalAlignment="Center">
+                    <SymbolIcon Symbol="Back" />
+                </Button>
+
+                <StackPanel
+                    Grid.Column="1"
+                    Orientation="Horizontal"
+                    Spacing="12"
+                    VerticalAlignment="Center">
                     <TextBlock
                         x:Name="FileNameTextBlock"
-                        FontSize="26"
+                        FontSize="22"
                         FontWeight="SemiBold"
-                        Text="Photo" />
+                        Text="Photo"
+                        TextTrimming="CharacterEllipsis" />
                     <TextBlock
                         x:Name="ProgressTextBlock"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="0 of 0 reviewed" />
+                        Text="0 of 0 reviewed"
+                        VerticalAlignment="Center" />
                 </StackPanel>
 
-                <TextBlock
-                    Grid.Column="1"
-                    x:Name="DecisionTextBlock"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Center" />
+                <Border
+                    Grid.Column="2"
+                    Padding="0"
+                    Background="Transparent"
+                    VerticalAlignment="Center">
+                    <TextBlock
+                        x:Name="DecisionTextBlock"
+                        HorizontalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        VerticalAlignment="Center" />
+                </Border>
+
+                <CommandBar
+                    Grid.Column="3"
+                    DefaultLabelPosition="Right"
+                    IsDynamicOverflowEnabled="False"
+                    OverflowButtonVisibility="Collapsed"
+                    VerticalAlignment="Center">
+                    <AppBarButton Click="OnUndoClicked" Icon="Undo" Label="Undo" />
+                    <AppBarButton Click="OnPromoteClicked" Icon="Add" Label="Promote" />
+                    <AppBarButton Click="OnRemoveLaterClicked" Icon="Remove" Label="Remove Later" />
+                </CommandBar>
             </Grid>
 
-            <Border
+            <Grid
+                Grid.Row="1"
+                Margin="0">
+                <ScrollViewer
+                    x:Name="PhotoScrollViewer"
+                    DoubleTapped="OnPhotoViewerDoubleTapped"
+                    HorizontalScrollBarVisibility="Auto"
+                    HorizontalScrollMode="Enabled"
+                    PointerMoved="OnPhotoViewerPointerMoved"
+                    PointerPressed="OnPhotoViewerPointerPressed"
+                    PointerReleased="OnPhotoViewerPointerReleased"
+                    PointerCanceled="OnPhotoViewerPointerReleased"
+                    MinZoomFactor="1"
+                    MaxZoomFactor="8"
+                    VerticalScrollBarVisibility="Auto"
+                    VerticalScrollMode="Enabled"
+                    ZoomMode="Enabled">
+                    <Grid>
+                        <Image
+                            x:Name="PhotoImage"
+                            HorizontalAlignment="Center"
+                            Stretch="Uniform"
+                            VerticalAlignment="Center" />
+                    </Grid>
+                </ScrollViewer>
+
+                <TextBlock
+                    x:Name="EmptyImageTextBlock"
+                    HorizontalAlignment="Center"
+                    Foreground="White"
+                    Text="No photo selected"
+                    VerticalAlignment="Center"
+                    Visibility="Collapsed" />
+            </Grid>
+
+            <Grid
                 Grid.Row="2"
-                CornerRadius="16"
-                Background="#101214"
-                Padding="16">
-                <Grid>
-                    <Image
-                        x:Name="PhotoImage"
-                        HorizontalAlignment="Stretch"
-                        Stretch="Uniform"
-                        VerticalAlignment="Stretch" />
-
-                    <TextBlock
-                        x:Name="EmptyImageTextBlock"
-                        HorizontalAlignment="Center"
-                        Foreground="White"
-                        Text="No photo selected"
-                        VerticalAlignment="Center"
-                        Visibility="Collapsed" />
-                </Grid>
-            </Border>
-
-            <Grid Grid.Row="3" ColumnSpacing="12">
+                ColumnSpacing="16"
+                VerticalAlignment="Center">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Button
-                    x:Name="PreviousButton"
-                    Click="OnPreviousClicked"
-                    Content="Previous"
-                    Grid.Column="0">
-                    <Button.KeyboardAccelerators>
-                        <KeyboardAccelerator Key="Left" />
-                    </Button.KeyboardAccelerators>
-                </Button>
+                <StackPanel
+                    Grid.Column="0"
+                    Orientation="Horizontal"
+                    Spacing="8">
+                    <Button
+                        x:Name="PreviousButton"
+                        Click="OnPreviousClicked"
+                        MinWidth="104"
+                        Padding="16,8">
+                        <StackPanel
+                            Orientation="Horizontal"
+                            Spacing="10">
+                            <TextBlock Text="Previous" />
+                            <Border
+                                Padding="6,2"
+                                Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="6">
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="Left" />
+                            </Border>
+                        </StackPanel>
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="Left" />
+                        </Button.KeyboardAccelerators>
+                    </Button>
 
-                <Button
-                    x:Name="NextButton"
-                    Click="OnNextClicked"
-                    Content="Next"
-                    Grid.Column="1">
-                    <Button.KeyboardAccelerators>
-                        <KeyboardAccelerator Key="Right" />
-                    </Button.KeyboardAccelerators>
-                </Button>
+                    <Button
+                        x:Name="NextButton"
+                        Click="OnNextClicked"
+                        MinWidth="88"
+                        Padding="16,8">
+                        <StackPanel
+                            Orientation="Horizontal"
+                            Spacing="10">
+                            <TextBlock Text="Next" />
+                            <Border
+                                Padding="6,2"
+                                Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="6">
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="Right" />
+                            </Border>
+                        </StackPanel>
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="Right" />
+                        </Button.KeyboardAccelerators>
+                    </Button>
+                </StackPanel>
 
-                <TextBlock
+                <StackPanel
                     Grid.Column="2"
-                    x:Name="ReviewHintTextBlock"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    HorizontalAlignment="Center"
-                    Text="Enter chooses. Esc or Space ignores. Left and Right move."
-                    VerticalAlignment="Center" />
+                    Orientation="Horizontal"
+                    Spacing="8">
+                    <Button
+                        x:Name="ChooseButton"
+                        Click="OnChooseClicked"
+                        MinWidth="104"
+                        Padding="18,8"
+                        Style="{StaticResource AccentButtonStyle}">
+                        <StackPanel
+                            Orientation="Horizontal"
+                            Spacing="10">
+                            <TextBlock Text="Choose" />
+                            <Border
+                                Padding="6,2"
+                                Background="#33000000"
+                                CornerRadius="6">
+                                <TextBlock
+                                    FontFamily="Segoe UI Symbol"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                                    Text="⏎" />
+                            </Border>
+                        </StackPanel>
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="Enter" />
+                        </Button.KeyboardAccelerators>
+                    </Button>
 
-                <Button
-                    x:Name="ChooseButton"
-                    Click="OnChooseClicked"
-                    Content="Choose"
-                    Grid.Column="3"
-                    Style="{StaticResource AccentButtonStyle}">
-                    <Button.KeyboardAccelerators>
-                        <KeyboardAccelerator Key="Enter" />
-                    </Button.KeyboardAccelerators>
-                </Button>
+                    <Button
+                        x:Name="IgnoreButton"
+                        Click="OnIgnoreClicked"
+                        MinWidth="96"
+                        Padding="18,8">
+                        <StackPanel
+                            Orientation="Horizontal"
+                            Spacing="10">
+                            <TextBlock Text="Ignore" />
+                            <Border
+                                Padding="6,2"
+                                Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                CornerRadius="6">
+                                <TextBlock
+                                    FontSize="12"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="Esc / Space" />
+                            </Border>
+                        </StackPanel>
+                        <Button.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="Escape" />
+                            <KeyboardAccelerator Key="Space" />
+                        </Button.KeyboardAccelerators>
+                    </Button>
 
-                <Button
-                    x:Name="IgnoreButton"
-                    Click="OnIgnoreClicked"
-                    Content="Ignore"
-                    Grid.Column="4">
-                    <Button.KeyboardAccelerators>
-                        <KeyboardAccelerator Key="Escape" />
-                        <KeyboardAccelerator Key="Space" />
-                    </Button.KeyboardAccelerators>
-                </Button>
+                    <Button
+                        x:Name="FinishIterationButton"
+                        Click="OnFinishIterationClicked"
+                        Content="Finish Iteration"
+                        MinWidth="136"
+                        Padding="18,8" />
+                </StackPanel>
             </Grid>
         </Grid>
     </Page.Content>

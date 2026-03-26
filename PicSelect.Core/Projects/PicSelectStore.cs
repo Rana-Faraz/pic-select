@@ -252,6 +252,19 @@ public sealed class PicSelectStore
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async Task DeleteProjectAsync(long projectId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM Projects
+            WHERE Id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId);
+        _ = await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static async Task<long> EnsureIterationOneAsync(
         SqliteConnection connection,
         long projectId,
@@ -594,6 +607,50 @@ public sealed class PicSelectStore
 
         _ = await insertCommand.ExecuteNonQueryAsync(cancellationToken);
         return photoId;
+    }
+
+    public async Task CompleteIterationAsync(
+        long projectId,
+        int iterationNumber,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = OpenConnection();
+        var iterationId = await TryGetIterationIdAsync(connection, projectId, iterationNumber, cancellationToken);
+        if (iterationId is null)
+        {
+            throw new InvalidOperationException("The requested iteration does not exist.");
+        }
+
+        var photos = await GetIterationPhotosByIterationIdAsync(connection, iterationId.Value, cancellationToken);
+        var undecidedPhotos = photos
+            .Where(photo => photo.DecisionType is null)
+            .ToList();
+
+        if (undecidedPhotos.Count == 0)
+        {
+            return;
+        }
+
+        var createdAtUtc = DateTimeOffset.UtcNow.ToString("O");
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        foreach (var photo in undecidedPhotos)
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                """
+                INSERT INTO DecisionEvents (ProjectId, IterationId, PhotoId, DecisionType, CreatedAtUtc)
+                VALUES ($projectId, $iterationId, $photoId, 'ignore', $createdAtUtc);
+                """,
+                cancellationToken,
+                ("$projectId", (object)projectId),
+                ("$iterationId", (object)iterationId.Value),
+                ("$photoId", (object)photo.PhotoId),
+                ("$createdAtUtc", (object)createdAtUtc));
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<IterationSummary> CreateNextIterationAsync(

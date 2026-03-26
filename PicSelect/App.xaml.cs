@@ -1,6 +1,10 @@
+using Microsoft.UI;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Xaml.Media;
 using PicSelect.Core.Projects;
 using PicSelect.Services;
+using WinRT.Interop;
 
 namespace PicSelect
 {
@@ -52,8 +56,47 @@ namespace PicSelect
                 window.Content = rootFrame;
             }
 
+            ConfigureWindow(window, rootFrame);
             _ = rootFrame.Navigate(typeof(MainPage), e.Arguments);
             window.Activate();
+        }
+
+        private static void ConfigureWindow(Window appWindow, Frame rootFrame)
+        {
+            appWindow.Title = "PicSelect";
+            rootFrame.RequestedTheme = ElementTheme.Dark;
+
+            appWindow.SystemBackdrop = new MicaBackdrop();
+
+            var hwnd = WindowNative.GetWindowHandle(appWindow);
+            var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+            var nativeWindow = AppWindow.GetFromWindowId(windowId);
+
+            if (!AppWindowTitleBar.IsCustomizationSupported())
+            {
+                return;
+            }
+
+            var titleBar = nativeWindow.TitleBar;
+            var activeBackground = ColorHelper.FromArgb(255, 18, 20, 24);
+            var inactiveBackground = ColorHelper.FromArgb(255, 28, 31, 36);
+            var hoverBackground = ColorHelper.FromArgb(255, 42, 45, 52);
+            var pressedBackground = ColorHelper.FromArgb(255, 58, 62, 70);
+            var captionForeground = Colors.White;
+            var inactiveForeground = ColorHelper.FromArgb(255, 176, 180, 186);
+
+            titleBar.BackgroundColor = activeBackground;
+            titleBar.ForegroundColor = captionForeground;
+            titleBar.InactiveBackgroundColor = inactiveBackground;
+            titleBar.InactiveForegroundColor = inactiveForeground;
+            titleBar.ButtonBackgroundColor = activeBackground;
+            titleBar.ButtonForegroundColor = captionForeground;
+            titleBar.ButtonHoverBackgroundColor = hoverBackground;
+            titleBar.ButtonHoverForegroundColor = captionForeground;
+            titleBar.ButtonPressedBackgroundColor = pressedBackground;
+            titleBar.ButtonPressedForegroundColor = captionForeground;
+            titleBar.ButtonInactiveBackgroundColor = inactiveBackground;
+            titleBar.ButtonInactiveForegroundColor = inactiveForeground;
         }
 
         /// <summary>

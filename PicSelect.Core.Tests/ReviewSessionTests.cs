@@ -135,6 +135,36 @@ public sealed class ReviewSessionTests
         Assert.Equal(0, session.ReviewedPhotoCount);
     }
 
+    [Fact]
+    public async Task CompleteIterationAsync_MarksRemainingPhotosIgnored()
+    {
+        using var workspace = new TestWorkspace();
+        var sourceFolder = workspace.CreateDirectory("finish-early");
+        workspace.WriteFile(Path.Combine(sourceFolder, "a.jpg"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "b.jpg"));
+        workspace.WriteFile(Path.Combine(sourceFolder, "c.jpg"));
+
+        var store = new PicSelectStore(workspace.DatabasePath);
+        var importedProject = await store.ImportProjectFromFolderAsync(sourceFolder);
+        var session = await store.GetReviewSessionAsync(importedProject.ProjectId, 1);
+
+        Assert.NotNull(session);
+        await store.RecordDecisionAsync(importedProject.ProjectId, 1, session.CurrentPhoto.PhotoId, "choose");
+
+        await store.CompleteIterationAsync(importedProject.ProjectId, 1);
+
+        var completedSession = await store.GetReviewSessionAsync(importedProject.ProjectId, 1);
+        var overview = await store.GetProjectOverviewAsync(importedProject.ProjectId);
+
+        Assert.NotNull(completedSession);
+        Assert.NotNull(overview);
+        Assert.Equal(3, completedSession.ReviewedPhotoCount);
+        Assert.Equal(new[] { "choose", "ignore", "ignore" }, completedSession.Photos.Select(photo => photo.DecisionType));
+        Assert.Equal(3, overview.Iterations.Single().ReviewedPhotoCount);
+        Assert.Equal(1, overview.Iterations.Single().ChosenPhotoCount);
+        Assert.Equal(2, overview.Iterations.Single().IgnoredPhotoCount);
+    }
+
     private sealed class TestWorkspace : IDisposable
     {
         private readonly string rootPath = Path.Combine(Path.GetTempPath(), "PicSelect.Tests", Guid.NewGuid().ToString("N"));

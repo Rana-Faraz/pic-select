@@ -61,15 +61,20 @@
                             Orientation="Horizontal"
                             Spacing="12">
                             <Button
-                                x:Name="CancelImportButton"
-                                Click="OnCancelImportClicked"
-                                Content="Cancel Import"
+                                x:Name="ForceStopButton"
+                                Click="OnForceStopClicked"
+                                Content="Force Stop"
                                 Visibility="Collapsed" />
                             <Button
                                 x:Name="RestartImportButton"
                                 Click="OnRestartImportClicked"
                                 Content="Restart Import"
                                 Style="{StaticResource AccentButtonStyle}"
+                                Visibility="Collapsed" />
+                            <Button
+                                x:Name="DeleteProjectButton"
+                                Click="OnDeleteProjectClicked"
+                                Content="Delete Project"
                                 Visibility="Collapsed" />
                         </StackPanel>
                     </StackPanel>

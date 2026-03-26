@@ -11,6 +11,7 @@ public sealed partial class ProjectDetailPage : Page
     private readonly ProjectImportCoordinator importCoordinator;
     private readonly DispatcherQueueTimer refreshTimer;
     private readonly PicSelectStore store;
+    private readonly ThumbnailCacheService thumbnailCache;
     private long currentProjectId;
     private ProjectImportStatus currentImportStatus;
     private bool isRefreshingProject;
@@ -21,6 +22,7 @@ public sealed partial class ProjectDetailPage : Page
         var app = (App)Application.Current;
         store = app.Store;
         importCoordinator = app.ImportCoordinator;
+        thumbnailCache = app.ThumbnailCache;
         refreshTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
         refreshTimer.Interval = TimeSpan.FromSeconds(1);
         refreshTimer.Tick += OnRefreshTick;
@@ -59,8 +61,9 @@ public sealed partial class ProjectDetailPage : Page
         ImportHintTextBlock.Text = string.Empty;
         ImportProgressTextBlock.Text = string.Empty;
         ImportElapsedTextBlock.Text = string.Empty;
-        CancelImportButton.Visibility = Visibility.Collapsed;
+        ForceStopButton.Visibility = Visibility.Collapsed;
         RestartImportButton.Visibility = Visibility.Collapsed;
+        DeleteProjectButton.Visibility = Visibility.Collapsed;
         ImportStateBorder.Visibility = Visibility.Collapsed;
         IterationsListView.ItemsSource = null;
         IterationsListView.Visibility = Visibility.Collapsed;
@@ -118,22 +121,35 @@ public sealed partial class ProjectDetailPage : Page
         await LoadProjectAsync(currentProjectId);
     }
 
-    private async void OnCancelImportClicked(object sender, RoutedEventArgs e)
+    private async void OnForceStopClicked(object sender, RoutedEventArgs e)
     {
         if (currentProjectId == 0)
         {
             return;
         }
 
-        CancelImportButton.IsEnabled = false;
+        var confirmed = await ConfirmAsync(
+            "Force stop import?",
+            "PicSelect will stop tracking this import and mark the project as canceled so you can restart or delete it.");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        ForceStopButton.IsEnabled = false;
         try
         {
             await importCoordinator.CancelImportAsync(currentProjectId);
+            if (currentImportStatus != ProjectImportStatus.Completed)
+            {
+                await store.SetProjectImportStatusAsync(currentProjectId, ProjectImportStatus.Canceled);
+            }
+
             await LoadProjectAsync(currentProjectId);
         }
         finally
         {
-            CancelImportButton.IsEnabled = true;
+            ForceStopButton.IsEnabled = true;
         }
     }
 
@@ -155,6 +171,35 @@ public sealed partial class ProjectDetailPage : Page
         finally
         {
             RestartImportButton.IsEnabled = true;
+        }
+    }
+
+    private async void OnDeleteProjectClicked(object sender, RoutedEventArgs e)
+    {
+        if (currentProjectId == 0)
+        {
+            return;
+        }
+
+        var confirmed = await ConfirmAsync(
+            "Delete project?",
+            "This removes the saved project history and local thumbnails, but does not touch the source image files.");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        DeleteProjectButton.IsEnabled = false;
+        try
+        {
+            await importCoordinator.CancelImportAsync(currentProjectId);
+            await store.DeleteProjectAsync(currentProjectId);
+            thumbnailCache.DeleteProjectCache(currentProjectId);
+            Frame.GoBack();
+        }
+        finally
+        {
+            DeleteProjectButton.IsEnabled = true;
         }
     }
 
@@ -201,12 +246,13 @@ public sealed partial class ProjectDetailPage : Page
             ImportProgressTextBlock.Text = GetImportProgressText(project);
             ImportElapsedTextBlock.Text = $"Elapsed {project.ImportElapsedText}";
             ImportStateBorder.Visibility = project.IsReviewAvailable ? Visibility.Collapsed : Visibility.Visible;
-            CancelImportButton.Visibility = importCoordinator.IsImportActive(projectId)
+            ForceStopButton.Visibility = CanForceStopImport(project.ImportStatus)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
             RestartImportButton.Visibility = CanRestartImport(project.ImportStatus)
                 ? Visibility.Visible
                 : Visibility.Collapsed;
+            DeleteProjectButton.Visibility = Visibility.Visible;
             IterationsListView.IsItemClickEnabled = project.IsReviewAvailable;
             IterationsListView.Visibility = project.Iterations.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             IterationsListView.ItemsSource = project.Iterations;
@@ -237,12 +283,30 @@ public sealed partial class ProjectDetailPage : Page
     private static bool CanRestartImport(ProjectImportStatus importStatus) =>
         importStatus is ProjectImportStatus.Canceled or ProjectImportStatus.Interrupted or ProjectImportStatus.Failed;
 
+    private static bool CanForceStopImport(ProjectImportStatus importStatus) =>
+        importStatus is ProjectImportStatus.Pending or ProjectImportStatus.Scanning or ProjectImportStatus.Importing;
+
+    private async Task<bool> ConfirmAsync(string title, string content)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = content,
+            PrimaryButtonText = "Confirm",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
     private static string GetImportHint(ProjectImportStatus importStatus) =>
         importStatus switch
         {
-            ProjectImportStatus.Pending => "Snapshot import has not started yet. Review stays locked until the project is fully imported.",
-            ProjectImportStatus.Scanning => "PicSelect is still scanning the folder. Review stays locked until the snapshot completes.",
-            ProjectImportStatus.Importing => "PicSelect is still importing photos. Review stays locked until the snapshot completes.",
+            ProjectImportStatus.Pending => "Snapshot import has not started yet. You can force stop it, restart it, or delete the project.",
+            ProjectImportStatus.Scanning => "PicSelect is still scanning the folder. You can force stop it, restart it later, or delete the project.",
+            ProjectImportStatus.Importing => "PicSelect is still importing photos. You can force stop it, restart it later, or delete the project.",
             ProjectImportStatus.Canceled => "This import was canceled. Restart the import before reviewing any iteration.",
             ProjectImportStatus.Interrupted => "This import was interrupted. Restart the import before reviewing any iteration.",
             ProjectImportStatus.Failed => "This import failed. Fix the problem and restart the import before reviewing any iteration.",

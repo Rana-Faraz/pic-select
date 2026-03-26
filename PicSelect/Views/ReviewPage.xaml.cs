@@ -1,7 +1,9 @@
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Xaml.Input;
 using PicSelect.Core.Projects;
 using PicSelect.Navigation;
+using Windows.Foundation;
 using Windows.Storage;
 using Windows.Storage.Streams;
 
@@ -10,6 +12,10 @@ namespace PicSelect.Views;
 public sealed partial class ReviewPage : Page
 {
     private readonly PicSelectStore store;
+    private bool isPanning;
+    private double panStartHorizontalOffset;
+    private Point panStartPointerPosition;
+    private double panStartVerticalOffset;
     private ReviewSession? session;
     private long projectId;
     private int iterationNumber;
@@ -18,6 +24,7 @@ public sealed partial class ReviewPage : Page
     {
         InitializeComponent();
         store = ((App)Application.Current).Store;
+        PhotoScrollViewer.SizeChanged += OnPhotoViewportSizeChanged;
     }
 
     protected override async void OnNavigatedTo(NavigationEventArgs e)
@@ -70,6 +77,32 @@ public sealed partial class ReviewPage : Page
         await LoadSessionAsync(undonePhotoId);
     }
 
+    private async void OnFinishIterationClicked(object sender, RoutedEventArgs e)
+    {
+        if (session is null)
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Finish iteration early?",
+            Content = "All remaining undecided photos will be marked as ignored and you will move to the iteration summary.",
+            PrimaryButtonText = "Finish Iteration",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        await store.CompleteIterationAsync(projectId, iterationNumber);
+        Frame.Navigate(typeof(IterationSummaryPage), new ProjectIterationNavigationArgs(projectId, iterationNumber));
+    }
+
     private async void OnPromoteClicked(object sender, RoutedEventArgs e)
     {
         if (session is null)
@@ -84,7 +117,6 @@ public sealed partial class ReviewPage : Page
         }
 
         await store.PromotePhotoToIterationAsync(projectId, session.CurrentPhoto.PhotoId, targetIteration.Value);
-        ReviewHintTextBlock.Text = $"Added this photo through iteration {targetIteration.Value}.";
     }
 
     private async void OnRemoveLaterClicked(object sender, RoutedEventArgs e)
@@ -101,7 +133,6 @@ public sealed partial class ReviewPage : Page
         }
 
         await store.RemovePhotoFromIterationAsync(projectId, session.CurrentPhoto.PhotoId, targetIteration.Value);
-        ReviewHintTextBlock.Text = $"Removed this photo from iteration {targetIteration.Value} and later.";
     }
 
     private void OnBackClicked(object sender, RoutedEventArgs e)
@@ -142,6 +173,7 @@ public sealed partial class ReviewPage : Page
             ProgressTextBlock.Text = string.Empty;
             DecisionTextBlock.Text = string.Empty;
             PhotoImage.Source = null;
+            ResetZoom();
             EmptyImageTextBlock.Visibility = Visibility.Visible;
             return;
         }
@@ -184,9 +216,11 @@ public sealed partial class ReviewPage : Page
 
         if (laterIterations.Count == 0)
         {
-            ReviewHintTextBlock.Text = includeCurrentMembership
-                ? "This photo is not in any later iteration."
-                : "No later iteration is available for promotion.";
+            await ShowMessageAsync(
+                includeCurrentMembership ? "Nothing to remove" : "Nothing to promote",
+                includeCurrentMembership
+                    ? "This photo is not in any later iteration."
+                    : "No later iteration is available for promotion.");
             return null;
         }
 
@@ -222,13 +256,121 @@ public sealed partial class ReviewPage : Page
             var image = new BitmapImage();
             await image.SetSourceAsync(stream);
             PhotoImage.Source = image;
+            FitImageToViewport();
+            ResetZoom();
             EmptyImageTextBlock.Visibility = Visibility.Collapsed;
         }
         catch
         {
             PhotoImage.Source = null;
+            ResetZoom();
             EmptyImageTextBlock.Visibility = Visibility.Visible;
             EmptyImageTextBlock.Text = "Unable to load this photo.";
         }
+    }
+
+    private async Task ShowMessageAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = message,
+            CloseButtonText = "OK",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        await dialog.ShowAsync();
+    }
+
+    private void OnPhotoViewerDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (PhotoImage.Source is null)
+        {
+            return;
+        }
+
+        if (PhotoScrollViewer.ZoomFactor > 1.01f)
+        {
+            ResetZoom();
+            return;
+        }
+
+        var targetZoom = 2.5f;
+        var position = e.GetPosition(PhotoScrollViewer);
+        var targetHorizontalOffset = Math.Max(0, (position.X * targetZoom) - (PhotoScrollViewer.ViewportWidth / 2));
+        var targetVerticalOffset = Math.Max(0, (position.Y * targetZoom) - (PhotoScrollViewer.ViewportHeight / 2));
+        PhotoScrollViewer.ChangeView(targetHorizontalOffset, targetVerticalOffset, targetZoom);
+    }
+
+    private void OnPhotoViewerPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (PhotoImage.Source is null || PhotoScrollViewer.ZoomFactor <= 1.01f)
+        {
+            return;
+        }
+
+        var point = e.GetCurrentPoint(PhotoScrollViewer);
+        if (!point.Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        isPanning = true;
+        panStartPointerPosition = point.Position;
+        panStartHorizontalOffset = PhotoScrollViewer.HorizontalOffset;
+        panStartVerticalOffset = PhotoScrollViewer.VerticalOffset;
+        PhotoScrollViewer.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void OnPhotoViewerPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!isPanning || PhotoScrollViewer.ZoomFactor <= 1.01f)
+        {
+            return;
+        }
+
+        var currentPosition = e.GetCurrentPoint(PhotoScrollViewer).Position;
+        var deltaX = currentPosition.X - panStartPointerPosition.X;
+        var deltaY = currentPosition.Y - panStartPointerPosition.Y;
+        var targetHorizontalOffset = Math.Max(0, panStartHorizontalOffset - deltaX);
+        var targetVerticalOffset = Math.Max(0, panStartVerticalOffset - deltaY);
+        PhotoScrollViewer.ChangeView(targetHorizontalOffset, targetVerticalOffset, null, true);
+        e.Handled = true;
+    }
+
+    private void OnPhotoViewerPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (!isPanning)
+        {
+            return;
+        }
+
+        isPanning = false;
+        PhotoScrollViewer.ReleasePointerCaptures();
+        e.Handled = true;
+    }
+
+    private void OnPhotoViewportSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        FitImageToViewport();
+    }
+
+    private void FitImageToViewport()
+    {
+        if (PhotoImage.Source is null)
+        {
+            return;
+        }
+
+        PhotoImage.MaxWidth = Math.Max(0, PhotoScrollViewer.ActualWidth - 24);
+        PhotoImage.MaxHeight = Math.Max(0, PhotoScrollViewer.ActualHeight - 24);
+    }
+
+    private void ResetZoom()
+    {
+        isPanning = false;
+        PhotoScrollViewer.ChangeView(0, 0, 1f, true);
     }
 }
